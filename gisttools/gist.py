@@ -19,7 +19,7 @@ def open_maybe_gzipped(filename):
 
 
 def gist_colnames(fmt, fh=None):
-    """Detect GIST version based on the first line of a table-format GIST output file.
+    """Return column names of a GIST file based on the format and the first line.
 
     The original GIST was implemented in Amber 14. With Amber 16, the dTS-six columns
     were introduced, featuring one annoying whitespace in the header. With the GPU
