@@ -1,0 +1,10 @@
+GistTools.egg-info/
+build/
+dist/
+gisttools/__pycache__/
+tests/.example_gist_5000frames.dat.swp
+tests/__pycache__/
+.eggs/
+__pycache__/setup.cpython-37.pyc
+*.pyc
+.mypy_cache/
