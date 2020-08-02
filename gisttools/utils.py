@@ -19,7 +19,7 @@ def open_maybe_gzipped(filename, mode='rt'):
     return opener(filename, mode)
 
 
-def preview_dataset_slow(struct, dataset, view=None, crange=None, cmap='coolwarm', mode='atom', indices=None, label='preview'):
+def preview_dataset_slow(struct, dataset, view=None, crange=None, cmap='YlGnBu', mode='atom', indices=None, label='preview'):
     """Create a colored surface in a nglview widget.  This function creates a
     new _ColorScheme object.  For large systems, this takes a while.
 
@@ -54,16 +54,14 @@ def preview_dataset_slow(struct, dataset, view=None, crange=None, cmap='coolwarm
     if view is None:
         view = _nv.show_mdtraj(struct, gui=True)
     colors = ScalarMappable(cmap=cmap)
-    colors.set_clim(cmin, cmax)
-    rgbvals = colors.to_rgba(dataset)
+    colors.set_clim(-cmax, -cmin)
+    rgbvals = (colors.to_rgba(-dataset) * 256).astype(np.int)
     if mode == 'atom':
         if indices is None:
             indices = range(dataset.shape[0])
         rgbtext = [
             [
-                '#{:02X}{:02X}{:02X}'.format(int(rgbvals[i, 0]*256),
-                                             int(rgbvals[i, 1]*256),
-                                             int(rgbvals[i, 2]*256)),
+                '#{:02X}{:02X}{:02X}'.format(*rgbvals[i]),
                 '@{}'.format(index)
             ] for i, index in enumerate(indices)
         ]
@@ -72,9 +70,7 @@ def preview_dataset_slow(struct, dataset, view=None, crange=None, cmap='coolwarm
             indices = range(struct.top.n_residues)
         rgbtext = [
             [
-                '#{:02X}{:02X}{:02X}'.format(int(rgbvals[i, 0]*256),
-                                             int(rgbvals[i, 1]*256),
-                                             int(rgbvals[i, 2]*256)),
+                '#{:02X}{:02X}{:02X}'.format(*rgbvals[i]),
                 '{}'.format(index)
             ] for i, index in enumerate(indices)
         ]
@@ -86,7 +82,7 @@ def preview_dataset_slow(struct, dataset, view=None, crange=None, cmap='coolwarm
     return view
 
 
-def preview_dataset_fast(struct, dataset, maximal_crange=None, view=None):
+def preview_dataset_fast(struct, dataset, maximal_crange=None, view=None, cmap="YlGnBu"):
     """Create a colored surface in a nglview widget.  This function writes a
     temporary .pdb file (GISTFILE_TEMP.pdb) in the current folder, with the
     dataset in the bfactor.  It has less control of the coloring than
@@ -115,8 +111,7 @@ def preview_dataset_fast(struct, dataset, maximal_crange=None, view=None):
 
     if maximal_crange is not None:
         cut_min, cut_max = maximal_crange
-        dataset = np.maximum(dataset, cut_min)
-        dataset = np.minimum(dataset, cut_max)
+        dataset = np.clip(dataset, cut_min, cut_max)
 
     minval, maxval = np.min(dataset), np.max(dataset)
     scale1, scale2 = 1, 1
@@ -132,8 +127,15 @@ def preview_dataset_fast(struct, dataset, maximal_crange=None, view=None):
     struct.save_pdb(tempfile.filename, force_overwrite=True, bfactors=dataset)
     view.add_component(tempfile.filename)
     # view.add_surface(color='bfactor')
-    view.set_representations(representations=[{'type': 'surface', 'params': {'colorScheme': 'bfactor', 'colorScale': 'RdYlBu', 'colorReverse': True}}])
-    # del tempfile
+    view.set_representations(representations=[{
+        'type': 'surface',
+        'params': {
+            'colorScheme': 'bfactor',
+            'colorScale': cmap,
+            'colorReverse': True
+        }
+    }])
+    # Tempfile goes out of scope and deletes the PREVIEW-...pdb file
     return view
 
 

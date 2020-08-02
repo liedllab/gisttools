@@ -8,6 +8,7 @@ setup(
     author_email="franz.waibl@uibk.ac.at",
     include_package_data=True,
     zip_safe=False,
+    install_requires=['numpy', 'pandas', 'numba', 'mdtraj', 'scipy', 'GridDataFormats'],
     setup_requires=['pytest_runner'],
     tests_require=['pytest'],
     py_modules=[

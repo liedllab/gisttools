@@ -317,7 +317,11 @@ class Gist:
         '0.0329'
 
         """
-        highest_pop_index = self["population"].idxmax()
+        # I used to use self['population'] here. This is unsafe when using GIST
+        # with ions, since there can be a voxel with no water but a lot of ions.
+        # The calculated rho0 with ions is WRONG. But this way at least n_frames
+        # works...
+        highest_pop_index = self[refcol].idxmax()
         highest_pop = self.loc[highest_pop_index]
         rho0 = highest_pop["Eww_unref_dens"] / highest_pop["Eww_unref_norm"] / highest_pop[refcol]
         return rho0
@@ -355,17 +359,19 @@ class Gist:
 
         """
         voxel_volume = self.grid.voxel_volume
-        highest_pop_index = self["population"].idxmax()
+        # I used to use self['population'] here. This is unsafe when using GIST
+        # with ions, since there can be a voxel with no water but a lot of ions.
+        highest_pop_index = self[refcol].idxmax()
         highest_pop = self.loc[highest_pop_index]
         rho0 = self.rho0
         if pd.isna(rho0):
             rho0 = self.detect_rho()
         if pd.isna(rho0):
             raise ValueError('Cannot detect number of frames because rho0 is NaN and cannot be detected.')
-        frames = np.int_(
+        n_frames = np.int_(
             np.round(highest_pop["population"] / rho0 / voxel_volume / highest_pop[refcol])
         )
-        return frames
+        return n_frames
 
     def distance_to_spheres(self, centers='struct', rmax=5., atomic_radii=None):
         """Uses grid.distance_to_spheres to find voxels within a given distance to
@@ -422,7 +428,7 @@ class Gist:
         col_suffix='_dens',
         centers='struct',
         dlim=(12, 16),
-        max_bin_size=0.1,
+        n_bins=10,
         min_relative_population=0.2,
         max_spread=0.01,
     ):
@@ -449,11 +455,11 @@ class Gist:
         dlim : tuple of 2 positive floats, where dlim[0] < dlim[1]
             Upper and lower limit of the rdf-slice that is used to detect the reference
             value.
-        max_bin_size : float
-            The bins for the rdf will be chosen such that the binsize is below this
-            value, and that the half range defined by dlim contains an integer number
-            of bins. This value does not affect the calculation, but it does affect the
-            density maximum, which is taken as reference for min_relative_population.
+        n_bins : int
+            Number of bins for the rdf. This value does not affect the
+            calculation, but it does affect the density maximum, which is taken
+            as reference for min_relative_population. Must be even because the
+            sanity checks split the distance range in 2 equal groups.
         min_relative_population : float
             Assert that the ratio between the mean bin population in the first half of
             the range and the population maximum in the histogram, as well as the same
@@ -480,53 +486,106 @@ class Gist:
         A pandas.Series object, where the columns are the index, and the respective
         reference values are the values.
         """
-        assert dlim[1] > dlim[0], f'dlim[1] must be > dlim[0], but dlim is {dlim}'
+        assert dlim[1] >= dlim[0], f'dlim[1] must be >= dlim[0], but dlim is {dlim}'
         if isinstance(columns, str):
             columns = [columns]
-        col_with_suffix = [c + col_suffix for c in columns]
-        half_range = (dlim[1] - dlim[0]) / 2.
-        n_bins_in_half_range = 1
-        while half_range / n_bins_in_half_range > max_bin_size:
-            n_bins_in_half_range += 1
-        bin_size = half_range / n_bins_in_half_range
-        # np.arange is flipped, so that there are always edges on the dlim values.
-        # The right edge does not have to be in bin_edges, since rdf uses np.digitize,
-        # which will assign len(edges) to values above the max.
-        bin_edges = np.flip(np.arange(dlim[1], 0, -bin_size))[:-1]
-        _, data_hists = self.rdf(['population'] + col_with_suffix, rmax=dlim[1], bins=bin_edges, col_suffix='')
-        # We don't need atom information, so we sum over the atoms axis.
-        pop_hist = data_hists[0].sum(0)
-        bin_centers = np.concatenate(([bin_edges[0] - bin_size], bin_edges)) + bin_size / 2.
+        columns_with_suffix = [c + col_suffix for c in columns]
+        # There must be an even number of bins, so that we can split the range
+        # in half for the sanity checks.
+        assert (n_bins % 2) == 0, "n_bins must be even."
+        bin_edges = np.linspace(dlim[0], dlim[1], n_bins, endpoint=False)
+        _, (pop_hist, *histograms) = self.multiple_rdfs(
+            ['population'] + columns_with_suffix,
+            rmax=dlim[1],
+            bins=bin_edges,
+            col_suffix='',
+        )
         max_pop = np.max(pop_hist)
-        first_half = np.logical_and(bin_centers > dlim[0], bin_centers < sum(dlim) / 2)
-        second_half = np.logical_and(bin_centers < dlim[1], bin_centers > sum(dlim) / 2)
-        in_dlim = np.logical_and(bin_centers > dlim[0], bin_centers < dlim[1])
-        # Those values are repeatedly used for the plausibility checks, but not for the actual calculation.
-        pop_first = pop_hist[first_half]
-        pop_second = pop_hist[second_half]
-        if np.average(pop_first) / max_pop < min_relative_population:
-            raise RuntimeError(f'Not enough population in the first half of dlim, {np.average(pop_first)} / {max_pop} < {min_relative_population}')
+        first_half = np.zeros(n_bins, dtype=bool)
+        first_half[:n_bins//2] = True
+        second_half = ~first_half
+        # Should never be false since we already checked that there is an even
+        # number of bins.
+        assert np.sum(first_half) == np.sum(second_half), \
+            "Uneven split in sanity check in detect_reference_value. This should never happen!"
+        # Sanity check Nr. 1:
+        # Check that there is a significant amount of population (water count)
+        # both in the first and in the second half of the distance range
+        if np.average(pop_hist[first_half]) / max_pop < min_relative_population:
+            raise RuntimeError(
+                'Not enough population in the first half of dlim, '
+                f'{np.average(pop_hist[first_half])} / {max_pop} < {min_relative_population}'
+            )
         if np.average(pop_hist[second_half]) / max_pop < min_relative_population:
-            raise RuntimeError(f'Not enough population in the second half of dlim, {np.average(pop_second)} / {max_pop} < {min_relative_population}')
+            raise RuntimeError(
+                'Not enough population in the second half of dlim, '
+                f'{np.average(pop_hist[second_half])} / {max_pop} < {min_relative_population}'
+            )
 
         ref_values = pd.Series()
-        for col, data_hist in zip(columns, data_hists[1:]):
-            data_hist = data_hist.sum(0)
-            # Normalize data_hist by the population, so that it converges towards the per_molecule reference value.
-            data_hist /= (pop_hist / (self.n_frames * self.grid.voxel_volume))
-            ref_first = data_hist[first_half]
-            ref_second = data_hist[second_half]
+        for col, hist in zip(columns, histograms):
+            # Normalize hist by the population, so that it converges towards the per_molecule reference value.
+            hist /= (pop_hist / (self.n_frames * self.grid.voxel_volume))
+            ref_values[col] = np.average(hist, weights=pop_hist)
+            # Sanity check Nr. 2:
+            # Check that the average reference value in the first and second half
+            # of the distance range is about equal (within max_spread)
             if abs(
-                np.average(ref_first, weights=pop_first)
-                - np.average(ref_second, weights=pop_first)
+                np.average(hist[first_half], weights=pop_hist[first_half])
+                - np.average(hist[second_half], weights=pop_hist[second_half])
             ) > max_spread:
                 raise RuntimeError(
                     'Too much difference between first and second half of dlim: '
-                    f'{np.average(ref_first, weights=pop_first)}'
-                    f' != {np.average(ref_second, weights=pop_second)}'
+                    f'{np.average(hist[first_half], weights=pop_hist[first_half])}'
+                    f' != {np.average(hist[second_half], weights=pop_hist[second_half])}'
                 )
-            ref_values[col] = np.average(data_hist[in_dlim], weights=pop_hist[in_dlim])
         return ref_values
+
+    def reference_mixture(
+        self,
+        non_water_density_cols,
+        energy_col='Eww_unref_dens',
+        pop_col='population',
+        centers='struct',
+        rmin=16.,
+        atomic_radii=None,
+    ):
+        voxels_within_rmin, _, _ = self.distance_to_spheres(
+            centers=centers,
+            rmax=rmin,
+            atomic_radii=atomic_radii
+        )
+        far_away = np.ones(self.grid.n_voxels, dtype=bool)
+        far_away[voxels_within_rmin] = False
+        if isinstance(non_water_density_cols, str):
+            non_water_density_cols = [non_water_density_cols]
+        # A density column based on the population
+        # In contrast to the g_ columns, the population is based on the centers
+        # of mass (at least if the com option for gigist was used), as well as
+        # ions.
+        g_population = self[pop_col].values / (self.rho0 * self.n_frames * self.grid.voxel_volume)
+        g_com = g_population - self[non_water_density_cols].sum(1).values
+        # g_com now contains the density of the water centers of mass.
+        # densities = gf.loc[far_away, x_components].values
+        densities = np.concatenate((
+            self[non_water_density_cols].values,
+            g_com.reshape(-1, 1)
+        ), axis=1)
+        ref_dens = densities[far_away]
+        ref_ener = self.loc[far_away, [energy_col]].values
+        assert len(ref_dens.shape) == 2 and ref_dens.shape[1] == len(non_water_density_cols) + 1, \
+            "Wrong shape for ref_dens: " + str(ref_dens.shape)
+        assert len(ref_ener.shape) == 2 and ref_ener.shape[1] == 1, \
+            "Wrong shape for ref_ener: " + str(ref_ener.shape)
+        assert len(ref_dens) == len(ref_ener), "Length of ref_dens and ref_ener does not match"
+        assert ref_dens.shape[0] > 10000, \
+            "Insufficient voxel number for ref_dens: " + str(ref_dens.shape[0])
+        ## OLS
+        refvals = np.linalg.inv(ref_dens.T @ ref_dens) @ ref_dens.T @ ref_ener
+        refvals = refvals.reshape(1, len(non_water_density_cols) + 1)
+        ref_energy = (densities * refvals).sum(1)
+        return ref_energy
+        
 
     def integrate_around(
         self,
@@ -603,7 +662,7 @@ class Gist:
         residues=None,
         atomic_radii=None,
         col_suffix='_dens',
-        weighting_method='piecewise_linear',
+        weighting_method=None,
         weighting_options=None,
     ):
         """Project GIST data to the nearest atoms using the algorithm from Michi's
@@ -641,12 +700,10 @@ class Gist:
             functions is only correct with density-weighted columns.
         weighting_method : str or None
             Used to weight voxels by their distance to the nearest atom. Can be
-            'piecewise_linear', 'gaussian', 'logistic', None, or a callable. Defaults
-            to piecewise_linear.
+            'piecewise_linear', 'gaussian', 'logistic', None, or a callable. 
         weighting_options : dict
             Options to pass on to the weighting function. See util.weight_... for
-            options to the different weighting functions. Defaults to
-            {'constant': rmax-3, 'cutoff': rmax}, which works with piecewise_linear.
+            options to the different weighting functions.
 
         Returns
         -------
@@ -663,7 +720,7 @@ class Gist:
         if residues is None:
             residues = np.arange(centers.shape[0])
         if weighting_options is None:
-            weighting_options = {'constant': rmax-3, 'cutoff': rmax}
+            weighting_options = {}
 
         unique_res = np.unique(residues)
         out = pd.DataFrame(index=unique_res, columns=columns)
@@ -762,7 +819,7 @@ class Gist:
         out = df.groupby('atom_index').sum()
         return out
 
-    def rdf(
+    def multiple_per_atom_rdfs(
         self,
         columns,
         centers='struct',
@@ -786,6 +843,90 @@ class Gist:
             Radius of the sphere from which voxels are to be projected onto the atoms,
             in angstrom.
         bins : int or 1D array-like
+            Left bin edges (if array-like) or the number of bins that should be
+            created for the range [0:rmax]
+        atomic_radii : np.ndarray or None or 'struct'
+            The atomic radius will be subtracted from every computed distance, yielding
+            the distance to the molecular surface instead of the distance to the
+            closest atomic center. If 'struct', uses the radii of self.struct. If None,
+            calculate the distance to the centers instead of to the atomic surface.
+            (Default None)
+        col_suffix : str, default '_dens'
+            Will be added to all column labels. The default is _dens because this
+            function is only correct with density-weighted columns.
+
+        Returns
+        -------
+        bins : np.ndarray(shape=(bins,))
+            The left edge of each distance bin.
+        rdfs : list of pandas.DataFrame objects
+            each element contains the per-atom rdf of one column
+        """
+        if isinstance(centers, str) and centers == 'struct':
+            centers = self.coord
+        centers = np.asarray(centers).reshape(-1, 3)
+        if isinstance(columns, str):
+            columns = [columns]
+        bins = np.asarray(bins)
+        if len(bins.shape) == 0:
+            bins = np.linspace(0, rmax, bins, endpoint=False)
+
+        ind, closest_atom, dist = self.distance_to_spheres(centers, rmax=rmax, atomic_radii=atomic_radii)
+
+        distance_bins = np.digitize(dist, bins)
+        # This is not the final shape of the output dataframe, since we exclude
+        # the first and last distance bin later on...
+        df_shape = (len(bins)+1, len(centers))
+        distance_and_atom_bin = np.ravel_multi_index(
+            (distance_bins, closest_atom), dims=df_shape
+        )
+
+        rdfs = []
+        for col in columns:
+            if col == 'voxels':
+                coldata = np.ones_like(ind)
+            else:
+                coldata = self.loc[ind, col + col_suffix].values * self.grid.voxel_volume
+            integrals = np.bincount(
+                distance_and_atom_bin,
+                weights=coldata,
+                minlength=np.prod(df_shape)
+            )
+            # The reason I set it up so that I have to transpose is that this
+            # way we get a Fortran-contiguous array, which is the default for
+            # DataFrames. There is probably another way to do this, but this
+            # works nicely.
+            # Now atoms in rows and bins in columns.
+            integrals_per_atom = integrals.reshape(df_shape).T
+            # Exclude the first and last column (bins for dist < 0 and dist > rmax)
+            integrals_per_atom = integrals_per_atom[:, 1:]
+            rdfs.append(pd.DataFrame(integrals_per_atom))
+        return bins, rdfs
+
+    def rdf(
+        self,
+        column,
+        centers='struct',
+        rmax=5.,
+        bins=20,
+        atomic_radii=None,
+        col_suffix='_dens',
+    ):
+        """Create a radial distribution function (rdf) of a single GIST
+        quantities around centers.
+
+        Parameters
+        ----------
+        column : str
+            column index to project.  Must be valid index for GistFile.data. If
+            'voxels' is given as a column name, returns the voxel count instead.
+        centers : np.ndarray, shape=(n, 3)
+            Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
+            Default 'struct'.
+        rmax : float
+            Radius of the sphere from which voxels are to be projected onto the atoms,
+            in angstrom.
+        bins : int or 1D array-like
             Histogram edges (if array-like) or the number of bins that should be
             created for the range [0:rmax]
         atomic_radii : np.ndarray or None or 'struct'
@@ -800,45 +941,130 @@ class Gist:
 
         Returns
         -------
-        edges : np.ndarray(shape=(bins+1,))
-        rdfs : list of pandas.DataFrame objects
-            each element contains the per-atom rdf of one column
+        bins : np.ndarray(shape=(bins,))
+            The left edge of each distance bin.
+        rdf : pd.Series.
+            The sum of the respective column voxels, summed per distance bin.
         """
-        if isinstance(centers, str) and centers == 'struct':
-            centers = self.coord
-        centers = np.asarray(centers).reshape(-1, 3)
+        bins, (rdf, ) = self.multiple_per_atom_rdfs(
+            columns=[column],
+            centers=centers,
+            rmax=rmax,
+            bins=bins,
+            atomic_radii=atomic_radii,
+            col_suffix=col_suffix,
+        )
+        return bins, rdf.sum(0)
+
+    def per_atom_rdf(
+        self,
+        column,
+        centers='struct',
+        rmax=5.,
+        bins=20,
+        atomic_radii=None,
+        col_suffix='_dens',
+    ):
+        """Create a radial distribution function (rdf) of a single GIST
+        quantities around centers.
+
+        Parameters
+        ----------
+        column : str
+            column index to project.  Must be valid index for GistFile.data. If
+            'voxels' is given as a column name, returns the voxel count instead.
+        centers : np.ndarray, shape=(n, 3)
+            Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
+            Default 'struct'.
+        rmax : float
+            Radius of the sphere from which voxels are to be projected onto the atoms,
+            in angstrom.
+        bins : int or 1D array-like
+            Histogram edges (if array-like) or the number of bins that should be
+            created for the range [0:rmax]
+        atomic_radii : np.ndarray or None or 'struct'
+            The atomic radius will be subtracted from every computed distance, yielding
+            the distance to the molecular surface instead of the distance to the
+            closest atomic center. If 'struct', uses the radii of self.struct. If None,
+            calculate the distance to the centers instead of to the atomic surface.
+            (Default None)
+        col_suffix : str, default '_dens'
+            Will be added to all column labels. The default is _dens because this
+            function is only correct with density-weighted columns.
+
+        Returns
+        -------
+        bins : np.ndarray(shape=(bins,))
+            The left edge of each distance bin.
+        rdf : pandas.DataFrame
+            The sum of the respective column voxels, summed per atom (in rows)
+            and per distance bin (columns).
+        """
+        bins, (rdf, ) = self.multiple_per_atom_rdfs(
+            columns=[column],
+            centers=centers,
+            rmax=rmax,
+            bins=bins,
+            atomic_radii=atomic_radii,
+            col_suffix=col_suffix,
+        )
+        return bins, rdf
+
+    def multiple_rdfs(
+        self,
+        columns,
+        centers='struct',
+        rmax=5.,
+        bins=20,
+        atomic_radii=None,
+        col_suffix='_dens',
+    ):
+        """Create a radial distribution function (rdf) of a single GIST
+        quantities around centers.
+
+        Parameters
+        ----------
+        columns : str or list of str
+            column indices to project.  Must be valid indices for self. If
+            'voxels' is given as a column name, returns the voxel count instead.
+        centers : np.ndarray, shape=(n, 3)
+            Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
+            Default 'struct'.
+        rmax : float
+            Radius of the sphere from which voxels are to be projected onto the atoms,
+            in angstrom.
+        bins : int or 1D array-like
+            Histogram edges (if array-like) or the number of bins that should be
+            created for the range [0:rmax]
+        atomic_radii : np.ndarray or None or 'struct'
+            The atomic radius will be subtracted from every computed distance, yielding
+            the distance to the molecular surface instead of the distance to the
+            closest atomic center. If 'struct', uses the radii of self.struct. If None,
+            calculate the distance to the centers instead of to the atomic surface.
+            (Default None)
+        col_suffix : str, default '_dens'
+            Will be added to all column labels. The default is _dens because this
+            function is only correct with density-weighted columns.
+
+        Returns
+        -------
+        bins : np.ndarray(shape=(bins,))
+            The left edge of each distance bin.
+        rdfs : List of pd.Series
+            The sum of the respective column voxels, summed per atom (in rows)
+            for each column in columns.
+        """
         if isinstance(columns, str):
             columns = [columns]
-        bins = np.asarray(bins)
-        if len(bins.shape) == 0:
-            bins = np.linspace(0, rmax, bins, endpoint=False)
-
-        ind, closest, dist = self.distance_to_spheres(centers, rmax=rmax, atomic_radii=atomic_radii)
-
-        bin_assignment = np.digitize(dist, bins)
-        df_shape = (len(bins)+1, len(centers))
-        atom_and_bin_assignment = np.ravel_multi_index(
-            (bin_assignment, closest), dims=df_shape
+        bins, rdfs = self.multiple_per_atom_rdfs(
+            columns=columns,
+            centers=centers,
+            rmax=rmax,
+            bins=bins,
+            atomic_radii=atomic_radii,
+            col_suffix=col_suffix,
         )
-
-        rdfs = []
-        for col in columns:
-            if col == 'voxels':
-                coldata = np.ones_like(ind)
-            else:
-                coldata = self.loc[ind, col + col_suffix].values * self.grid.voxel_volume
-            integrals = np.bincount(
-                atom_and_bin_assignment,
-                weights=coldata,
-                minlength=np.prod(df_shape)
-            )
-            # The reason I set it up so that I have to transpose is that this way
-            # we get a Fortran-contiguous array. There is probably another way to
-            # do this, but this works nicely.
-            # Now atoms in rows and bins in columns.
-            integrals_per_atom = integrals.reshape(df_shape).T
-            rdfs.append(pd.DataFrame(integrals_per_atom))
-        return bins, rdfs
+        return bins, [rdf.sum(0) for rdf in rdfs]
 
     def _norm2dens(self, *args, **kwargs):
         warnings.warn(
