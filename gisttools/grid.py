@@ -315,6 +315,17 @@ class Grid:
         min_indices, max_indices = self.closest((xyzmin, xyzmax), out_of_bounds='closest')
         return [np.arange(imin, imax + 1) for imin, imax in zip(min_indices, max_indices)]
 
+    def get_shape_buffer(self, max_radius):
+        """Get a ShapeBuffer instance according to this grid. Buffers will be
+        sized so that atoms up to a radius of max_radius can be inserted.
+        """
+        return ShapeBuffer(
+            origin=self.origin,
+            shape=self.shape,
+            delta=self.delta,
+            max_radius=max_radius,
+        )
+
     def surrounding_sphere(self, center, radius):
         """Find voxels that lie within a sphere of 'radius' around the 'center'.
 
@@ -789,7 +800,7 @@ surrounding_spheres_helper_spec = [
     ('z_distance_buffer', numba.float64[:]),
 ]
 @jitclass(surrounding_spheres_helper_spec)
-class SurroundingSpheresHelper(object):
+class ShapeBuffer(object):
     def __init__(self, origin, shape, delta, max_radius):
         self.origin = origin
         self.shape = shape
@@ -804,10 +815,10 @@ class SurroundingSpheresHelper(object):
         self.x_distance_buffer = np.empty(max_needed_voxels[0])
         self.y_distance_buffer = np.empty(max_needed_voxels[1])
         self.z_distance_buffer = np.empty(max_needed_voxels[2])
-        self.prepare()
+        self.reset()
         return
 
-    def prepare(self):
+    def reset(self):
         """Initialize the distance- and index-buffers. This is called
         automatically when creating a new instance, but may be called later on
         to reuse the same object.
@@ -869,7 +880,8 @@ class SurroundingSpheresHelper(object):
                     dz_squared = self.z_distance_buffer[k]
                     d_squared = dxy_squared + dz_squared
                     index = xy_index + z_index
-                    if d_squared < radius_squared and d_squared < self.distance_buffer[index]:
+                    is_closest = d_squared < radius_squared and d_squared < self.distance_buffer[index]
+                    if is_closest:
                         self.index_buffer[index] = atomnum
                         self.distance_buffer[index] = d_squared
         return
