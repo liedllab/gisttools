@@ -12,9 +12,6 @@ def test_combine_gists():
     example1 = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
     example2 = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
     example2.grid.origin[2] += 1.
-    # with pytest.warns(RuntimeWarning):
-        # Warns because there is no eww_ref. Maybe I should change the behaviour to use
-        # oneo the values from the input Gist objects.
     combined = gist.combine_gists([example1, example2])
     expected_shape = np.array([2, 3, 4])
     expected_z_column = np.array([-0.25, 0.25, 0.75, 1.25]*6)
@@ -65,11 +62,12 @@ def test_detect_gist_format_gigist():
     return
 
 def test_integrate_around():
-    # voxel_volume is 1/4 and n_frames is 2500 because I halved the spacing in one
-    # direction of the example file. The "magic" numbers in expected are the sums of
-    # the respective voxels in the _dens columns.
+    # voxel_volume is 1/4 and n_frames is 2500 because I doubled the spacing in
+    # the x direction of the example file. The "magic" numbers in expected are
+    # the sums of the respective voxels in the _dens columns.
+    example = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=2500, eww_ref=0)
     with pytest.warns(RuntimeWarning):
-        example = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=2500, eww_ref=-0)
+        example = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=2500)
     integrals = example.integrate_around(
         ["A", "Esw"],
         centers=[[-0.5, -0.5, -0.25]],
@@ -93,6 +91,57 @@ def test_distance_to_spheres():
         dist + 0.5,
         np.sqrt(np.sum(np.array([1., 0., 0.25])**2))
     )
+
+def construct_3x3x100_coords():
+    xyz = np.stack((
+        np.repeat([-1, 0, 1], 300),
+        np.tile(np.repeat([-1, 0, 1], 100), 3),
+        np.tile(np.arange(100), 9)
+    )).T
+    return xyz
+
+def test_construct_3x3x3_coords():
+    xyz = construct_3x3x100_coords()
+    np.testing.assert_array_equal(xyz[:2], [[-1, -1, 0], [-1, -1, 1]])
+    np.testing.assert_array_equal(xyz[-2:], [[1, 1, 98], [1, 1, 99]])
+
+def test_gist_from_dataframe():
+    xyz = construct_3x3x100_coords()
+    gf = gist.Gist.from_dataframe(pd.DataFrame({
+        'x': xyz[:, 0],
+        'y': xyz[:, 1],
+        'z': xyz[:, 2],
+        'TESTCOL': np.random.random(len(xyz)),
+    }))
+    np.testing.assert_allclose(gf.grid.origin, [-1, -1, 0])
+    np.testing.assert_allclose(gf.grid.shape, [3, 3, 100])
+    np.testing.assert_allclose(gf.grid.delta, [1, 1, 1])
+
+def test_projection_nearest_no_weight():
+    xyz = construct_3x3x100_coords()
+    class mock_traj:
+        """Used as dummy object"""
+    mock_traj.xyz = np.array([[
+        [-1, -1, 0],
+        [-1,  0, 0],
+        [-1,  1, 0],
+        [ 0, -1, 0],
+        [ 0,  0, 0],
+        [ 0,  1, 0],
+        [ 1, -1, 0],
+        [ 1,  0, 0],
+        [ 1,  1, 0],
+    ]]) * 0.1  # mdtraj calculates in nm.
+    gf = gist.Gist.from_dataframe(pd.DataFrame({
+        'x': xyz[:, 0],
+        'y': xyz[:, 1],
+        'z': xyz[:, 2],
+        'TEST_dens': np.ones(len(xyz)),
+        'population': np.ones(len(xyz)),
+    }), struct=mock_traj, rho0=1., n_frames=1)
+    proj = gf.projection_nearest(['TEST', 'voxel'], rmax=3.)
+    np.testing.assert_allclose(proj.TEST.values, [1])
+
 print("Running doctests ...")
 import doctest
 doctest.testmod(gist)

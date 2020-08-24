@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import gzip
-from gisttools.utils import open_maybe_gzipped, distance_weight
+from gisttools.utils import open_maybe_gzipped, distance_weight, cartesian_product
 import os
 import numpy as np
 
@@ -32,3 +32,16 @@ def test_distance_weight():
     assert np.allclose(weighted_logistic, 1 / (1 + np.exp(3*(test_arr - 3.))))
     assert np.allclose(weighted_square, [0, 1, 4, 9, 16, 25, 36, 49, 64, 81])
     assert np.allclose(weighted_none, np.ones(test_arr.shape))
+
+def test_cartesian_product():
+    a = np.array([-1, 1])
+    b = np.array([0, 2, 4])
+    c = np.array([3, 6])
+    ab = cartesian_product(a, b)
+    abc = cartesian_product(a, b, c)
+    ab_expected = np.array([[-1, 0], [-1, 2], [-1, 4], [1, 0], [1, 2], [1, 4]])
+    abc_expected = np.hstack(
+        (np.repeat(ab_expected, 2, axis=0), np.tile(c, 6).reshape(-1, 1))
+    )
+    np.testing.assert_array_equal(ab, ab_expected)
+    np.testing.assert_array_equal(abc, abc_expected)

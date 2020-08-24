@@ -16,6 +16,7 @@ setup(
         "gisttools.utils",
         "gisttools.command_line",
         "gisttools.gist",
+        "gisttools.shape_buffer",
     ],
     entry_points={
         "console_scripts": ["gist_projection=gisttools.command_line:gist_projection"]

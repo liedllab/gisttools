@@ -159,7 +159,7 @@ class Gist:
         strip_H=False,
         n_frames=None,
         rho0=None,
-        eww_ref=0.,
+        eww_ref=None,
         autodetect_refcol='g_O',
     ):
         """Initialize a new Gist object.
@@ -176,7 +176,7 @@ class Gist:
         strip_H : bool
             Whether hydrogen should be stripped from struct.
         eww_ref : float
-            Reference value for Eww_norm.
+            Reference value for Eww_norm. Default None
         autodetect_refcol : str
             The reference column to use when detecting n_frames and rho0. This HAS to
             be the column that corresponds to the population. When using water, this is
@@ -201,13 +201,16 @@ class Gist:
             except KeyError:
                 n_frames = None
         self.n_frames = n_frames
+        if eww_ref == None:
+            eww_ref = 0.
+            if 'Eww_unref_norm' in self.data.columns:
+                warnings.warn(RuntimeWarning(
+                    'eww reference is zero, but there is a Eww_unref_norm column. '
+                    'All operations that rely on referenced Eww values will '
+                    'generate wrong results. Explicitly set eww_ref to zero to '
+                    'suppress this warning.'
+                ))
         self.eww_ref = eww_ref
-        if eww_ref == 0. and 'Eww_unref_norm' in self.data.columns:
-            warnings.warn(RuntimeWarning(
-                'eww reference is zero, but there is a Eww_unref_norm column. '
-                'All operations that rely on referenced Eww values will '
-                'generate wrong results.'
-            ))
         self.struct = struct
         if struct is not None and strip_H:
             self.struct = self.struct.atom_slice(self.struct.top.select("symbol != H"))
@@ -645,14 +648,10 @@ class Gist:
             * self.grid.voxel_volume \
             * distance_weight(dist, weighting_method, **weighting_options)
         )
-        out = pd.Series()
+        out = pd.Series(dtype=float)
         for col in columns:
             out[col] = np.sum((self.loc[ind, col]*weights).values)
         return out.rename(rename)
-
-    def projection_schauperl(self, *args, **kwargs):
-        warnings.warn('projection_schauperl has been renamed to projection_mean.', DeprecationWarning)
-        return self.projection_mean(*args, **kwargs)
 
     def projection_mean(
         self,
@@ -875,7 +874,7 @@ class Gist:
 
         distance_bins = np.digitize(dist, bins)
         # This is not the final shape of the output dataframe, since we exclude
-        # the first and last distance bin later on...
+        # the first distance bin later on...
         df_shape = (len(bins)+1, len(centers))
         distance_and_atom_bin = np.ravel_multi_index(
             (distance_bins, closest_atom), dims=df_shape
@@ -1066,12 +1065,6 @@ class Gist:
         )
         return bins, [rdf.sum(0) for rdf in rdfs]
 
-    def _norm2dens(self, *args, **kwargs):
-        warnings.warn(
-            '_norm2dens has been renamed norm2dens.', DeprecationWarning
-        )
-        return self.norm2dens(*args, **kwargs)
-
     def norm2dens(self, data, index=slice(None)):
         """Convert an arbitrary data column from a _norm quantity to a _dens quanity."""
         out = (
@@ -1081,12 +1074,6 @@ class Gist:
         )
         out[pd.isna(out)] = 0.
         return out
-
-    def _dens2norm(self, *args, **kwargs):
-        warnings.warn(
-            '_dens2norm has been renamed dens2norm.', DeprecationWarning
-        )
-        return self.dens2norm(*args, **kwargs)
 
     def dens2norm(self, data, index=slice(None)):
         """Convert an arbitrary data column from a _dens quantity to a _norm quanity."""
@@ -1228,39 +1215,6 @@ class _GistLocator:
         return
 
 
-# _gist_fields = {
-#     'amber16': [
-#         'voxel', 'x', 'y', 'z', 'pop', 'g_O', 'g_H', 'dTStrans_dens', 'dTStrans_norm',
-#         'dTSorient_dens', 'dTSorient_norm', 'dTSsix_dens', 'dTSsix_norm', 'Esw_dens',
-#         'Esw_norm', 'Eww_dens', 'Eww_unref_norm', 'Dipole_x_dens', 'Dipole_y_dens',
-#         'Dipole_z_dens', 'Dipole_dens', 'neighbor_dens', 'neighbor_norm', 'order_norm'
-#     ],
-#     'amber14': [
-#         'voxel', 'x', 'y', 'z', 'pop', 'g_O', 'g_H', 'dTStrans_dens', 'dTStrans_norm',
-#         'dTSorient_dens', 'dTSorient_norm', 'Esw_dens', 'Esw_norm', 'Eww_dens',
-#         'Eww_unref_norm', 'Dipole_x_dens', 'Dipole_y_dens', 'Dipole_z_dens',
-#         'Dipole_dens', 'neighbor_dens', 'neighbor_norm', 'order_norm'
-#     ],
-#     'hansi': [
-#         'voxel', 'x', 'y', 'z', 'pop', 'dTStrans_dens', 'dTStrans_norm',
-#         'dTSorient_dens', 'dTSorient_norm', 'dTSsix_dens', 'dTSsix_norm', 'Esw_dens',
-#         'Esw_norm', 'Eww_dens', 'Eww_unref_norm', 'Dipole_x_dens', 'Dipole_y_dens',
-#         'Dipole_z_dens', 'Dipole_dens', 'g_O', 'g_H'
-#     ],
-#     'pgist': [
-#         "voxel", "x", "y", "z", "pop", "dTStrans_dens", "dTStrans_norm",
-#         "dTSorient_dens", "dTSorient_norm", "dTSsix_dens", "dTSsix_norm",
-#         "Esw_dens", "Esw_norm", "Eww_dens", "Eww_unref_norm", "DipoleX", "dipoleY",
-#         "dipoleZ", "dipole", "neighbour_d", "neighbour_n", "order_n", "g_O", "g_H",
-#     ]
-# }
-
-
-def loadGistFile(*args, **kwargs):
-    warnings.warn('loadGistFile has been renamed to load_gist_file.', DeprecationWarning)
-    return load_gist_file(*args, **kwargs)
-
-
 # Possibly will use keyword-only arguments later on
 def load_gist_file(
     filename,
@@ -1268,7 +1222,7 @@ def load_gist_file(
     rho0=None,
     struct=None,
     strip_H=False,
-    eww_ref=0.,
+    eww_ref=None,
     format=None,
     autodetect_refcol='g_O',
 ):
@@ -1336,7 +1290,7 @@ def load_dx(
     rho0=None,
     struct=None,
     strip_H=False,
-    eww_ref=0.,
+    eww_ref=None,
 ):
     """Return a Gist instance by loading an OpenDX file from disk.
 

@@ -1,10 +1,10 @@
 import numpy as np
-# from .utils import cartesian_product
+from .utils import cartesian_product
 # from numba import jitclass, int64, float64
 import numba
 import warnings
-from numba import njit, jitclass
 from textwrap import dedent
+from .shape_buffer import ShapeBuffer
 
 
 class Grid:
@@ -315,7 +315,7 @@ class Grid:
         min_indices, max_indices = self.closest((xyzmin, xyzmax), out_of_bounds='closest')
         return [np.arange(imin, imax + 1) for imin, imax in zip(min_indices, max_indices)]
 
-    def get_shape_buffer(self, max_radius):
+    def get_shape_buffer(self):
         """Get a ShapeBuffer instance according to this grid. Buffers will be
         sized so that atoms up to a radius of max_radius can be inserted.
         """
@@ -323,7 +323,6 @@ class Grid:
             origin=self.origin,
             shape=self.shape,
             delta=self.delta,
-            max_radius=max_radius,
         )
 
     def surrounding_sphere(self, center, radius):
@@ -386,22 +385,24 @@ class Grid:
         -----
         This is a helper function that returns the squared distance.
         """
-        center = np.asfarray(center).reshape(3)
-        flat_indices, sqrdist = _surrounding_sphere_helper(
-            self.shape,
-            self.delta,
-            self.origin,
-            center,
-            float(radius),
+        center = np.asfarray(center, dtype=np.float64).reshape(3)
+        flat_indices, sqrdist = _surrounding_sphere(
+            origin=self.origin,
+            shape=self.shape,
+            delta=self.delta,
+            center=center,
+            radius=float(radius),
         )
         return flat_indices, sqrdist
-        # Alternative numpy implementation:
-        # ---------------------------------
-        # box_indices = cartesian_product(*self.surrounding_box(center, radius))
-        # relative_coords = box_indices * self.delta + (self.origin - center)
-        # sqrdist = np.sum(relative_coords**2, 1)
-        # sub_indices = sqrdist < radius ** 2
-        # return self.flat_indices(box_indices[sub_indices]), sqrdist[sub_indices]
+
+    def surrounding_sphere_np(self, center, radius):
+        """Pure numpy implementation of surrounding_sphere"""
+        center = np.asarray(center).reshape(3)
+        box_indices = cartesian_product(*self.surrounding_box(center, radius))
+        relative_coords = box_indices * self.delta + (self.origin - center)
+        sqrdist = np.sum(relative_coords**2, 1)
+        within_sphere = sqrdist <= radius ** 2
+        return self.flat_indices(box_indices[within_sphere]), np.sqrt(sqrdist[within_sphere])
 
     def distance_to_centers(self, centers, rmax):
         """Find voxels that lie within 'rmax' of any row in 'centers'.
@@ -455,6 +456,9 @@ class Grid:
         indices = np.flatnonzero(current_smallest != np.inf)
         distances = np.sqrt(current_smallest[indices])
         closest_center = current_closest_center[indices]
+        assert np.all(
+            closest_center != -1
+        ), "No distance was calculated for at least one relevant voxel. This is likely a bug."
         return indices, closest_center, distances
 
     def surrounding_sphere_mult(self, *args, **kwargs):
@@ -519,8 +523,8 @@ class Grid:
         # (non-squared) distances.
         centers = np.asarray(centers).reshape(-1, 3)
         radii = np.broadcast_to(radii, centers.shape[0])
-        current_smallest = np.full(self.n_voxels, np.inf)
-        current_closest_center = np.full(self.n_voxels, -1)
+        current_smallest = np.full(self.n_voxels, np.inf, dtype=np.float64)
+        current_closest_center = np.full(self.n_voxels, -1, dtype=np.int64)
         for i, (center, radius) in enumerate(zip(centers, radii)):
             ind, sqrdist = self._surrounding_sphere(center, rmax + radius)
             sphere_dist = np.sqrt(sqrdist) - radius
@@ -716,14 +720,14 @@ def _round(a):
     return round(a)
 
 
-@njit((
+@numba.njit((
     numba.int64[:],  # shape
     numba.float64[:],  # delta
     numba.float64[:],  # origin
     numba.float64[:],  # center
     numba.float64  # radius
 ), cache=True)
-def _surrounding_box(shape, delta, origin, center, radius):
+def _surrounding_box_edges(shape, delta, origin, center, radius):
     """Return a box with wall distance of radius to the center. shape, delta,
     and origin define the grid.
 
@@ -731,169 +735,59 @@ def _surrounding_box(shape, delta, origin, center, radius):
     -------
     x, y, z: np.ndarray, 1D
     """
-    xyzmin = _round((center - radius - origin) / delta)
-    xyzmin = _maximum(xyzmin.astype(np.int64), np.array([0, 0, 0]))
-    xyzmax = _round((center + radius - origin) / delta)
-    xyzmax = _minimum(xyzmax.astype(np.int64), shape - 1)
-    x_ind = np.arange(xyzmin[0], xyzmax[0] + 1)
-    y_ind = np.arange(xyzmin[1], xyzmax[1] + 1)
-    z_ind = np.arange(xyzmin[2], xyzmax[2] + 1)
+    xyz_min = _round((center - radius - origin) / delta)
+    xyz_min = _maximum(xyz_min.astype(np.int64), np.array([0, 0, 0]))
+    xyz_max = _round((center + radius - origin) / delta)
+    xyz_max = _minimum(xyz_max.astype(np.int64), shape - 1)
+    x_ind = np.arange(xyz_min[0], xyz_max[0] + 1, dtype=np.int64)
+    y_ind = np.arange(xyz_min[1], xyz_max[1] + 1, dtype=np.int64)
+    z_ind = np.arange(xyz_min[2], xyz_max[2] + 1, dtype=np.int64)
     return x_ind, y_ind, z_ind
 
 
-@njit((
+@numba.njit((
+    numba.float64[:],  # origin
     numba.int64[:],  # shape
     numba.float64[:],  # delta
-    numba.float64[:],  # origin
     numba.float64[:],  # center
     numba.float64  # radius
-), cache=True)
-def _surrounding_sphere_helper(
+))
+# ), cache=True, fastmath=True)
+def _surrounding_sphere(
+    origin,
     shape,
     delta,
-    origin,
     center,
     radius
 ):
-    x_index, y_index, z_index = _surrounding_box(shape, delta, origin, center, radius)
-    x_sqr = (x_index * delta[0] + (origin[0] - center[0]))**2
-    y_sqr = (y_index * delta[1] + (origin[1] - center[1]))**2
-    z_sqr = (z_index * delta[2] + (origin[2] - center[2]))**2
-    sqrrad = radius ** 2
-    # xlen = shape[0]
-    ylen = shape[1]
-    zlen = shape[2]
-    yzlen = ylen * zlen
-    max_n_indices = len(x_sqr) * len(y_sqr) * len(z_sqr)
-    indices = np.zeros((max_n_indices), dtype=np.int64)
-    distances = np.zeros((max_n_indices), dtype=np.float64)
-    n_indices = 0
-    for i, xs in enumerate(x_sqr):
-        for j, ys in enumerate(y_sqr):
+    """
+    For all voxels within the sphere defined by center and radius, return grid
+    indices and distances to the sphere center.
+
+    Returns
+    -------
+    indices : np.ndarray, shape=(n_voxels, ), dtype=int
+    distances : np.ndarray, shape=(n_voxels, ), dtype=float
+    """
+    x_indices, y_indices, z_indices = _surrounding_box_edges(shape, delta, origin, center, radius)
+    squared_x_dist = (x_indices * delta[0] + (origin[0] - center[0]))**2
+    squared_y_dist = (y_indices * delta[1] + (origin[1] - center[1]))**2
+    squared_z_dist = (z_indices * delta[2] + (origin[2] - center[2]))**2
+    squared_radius = radius ** 2
+    max_output_size = len(squared_x_dist) * len(squared_y_dist) * len(squared_z_dist)
+    indices = np.zeros((max_output_size), dtype=np.int64)
+    squared_distances = np.zeros((max_output_size), dtype=np.float64)
+    output_pos = 0
+    for i, dx_2 in enumerate(squared_x_dist):
+        for j, dy_2 in enumerate(squared_y_dist):
             # Precompute some stuff before the innermost loop
             # This helps a little bit, but not too much.
-            xys = xs + ys
-            zmax = sqrrad - xys
-            xyind = x_index[i] * yzlen + y_index[j] * zlen
-            for k, zs in enumerate(z_sqr):
-                if zs < zmax:  # xs + ys + zs > sqrrad
-                    indices[n_indices] = xyind + z_index[k]
-                    distances[n_indices] = xys + zs
-                    n_indices += 1
-    return indices[:n_indices], distances[:n_indices]
-
-# Currently unused code follows.
-# 
-# This will at some point be used for the distance_to_spheres method, since it
-# is 2-3 times faster. For normal GIST post-processing, this does not matter,
-# but when running this code over a trajectory, the speedup becomes relevant.
-
-surrounding_spheres_helper_spec = [
-    ('origin', numba.float64[:]),
-    ('shape', numba.int64[:]),
-    ('delta', numba.float64[:]),
-    ('max_radius', numba.float64),
-    ('distance_buffer', numba.float64[:]),
-    ('index_buffer', numba.int64[:]),
-    ('x_distance_buffer', numba.float64[:]),
-    ('y_distance_buffer', numba.float64[:]),
-    ('z_distance_buffer', numba.float64[:]),
-]
-@jitclass(surrounding_spheres_helper_spec)
-class ShapeBuffer(object):
-    def __init__(self, origin, shape, delta, max_radius):
-        self.origin = origin
-        self.shape = shape
-        self.delta = delta
-        self.max_radius = max_radius
-
-        n_voxels = np.prod(self.shape)
-        self.distance_buffer = np.empty(n_voxels, dtype=np.float64)
-        self.index_buffer = np.empty(n_voxels, dtype=np.int64)
-
-        max_needed_voxels = ((2 * self.max_radius / delta) + 2).astype(np.int64)
-        self.x_distance_buffer = np.empty(max_needed_voxels[0])
-        self.y_distance_buffer = np.empty(max_needed_voxels[1])
-        self.z_distance_buffer = np.empty(max_needed_voxels[2])
-        self.reset()
-        return
-
-    def reset(self):
-        """Initialize the distance- and index-buffers. This is called
-        automatically when creating a new instance, but may be called later on
-        to reuse the same object.
-        """
-        self.distance_buffer[:] = np.inf
-        self.index_buffer[:] = -1
-
-    def surrounding_box(self, center, radius):
-        """Return a box with wall distance of radius to the center.
-
-        Returns
-        -------
-        xmin, xmax, ymin, ymax, zmin, zmax : int. Indices per dimension that
-        define the edges of the surrounding box. The _max values define the
-        value after the last element.
-        """
-        xmin = round((center[0] - radius - self.origin[0]) / self.delta[0])
-        ymin = round((center[1] - radius - self.origin[1]) / self.delta[1])
-        zmin = round((center[2] - radius - self.origin[2]) / self.delta[2])
-        xmin = max(int(xmin), 0)
-        ymin = max(int(ymin), 1)
-        zmin = max(int(zmin), 2)
-        xmax = round((center[0] + radius - self.origin[0]) / self.delta[0])
-        ymax = round((center[1] + radius - self.origin[1]) / self.delta[1])
-        zmax = round((center[2] + radius - self.origin[2]) / self.delta[2])
-        xmax = min(int(xmax), self.shape[0] - 1) + 1
-        ymax = min(int(ymax), self.shape[1] - 1) + 1
-        zmax = min(int(zmax), self.shape[2] - 1) + 1
-        return xmin, xmax, ymin, ymax, zmin, zmax
-
-    def insert_sphere(self, center, radius, atomnum):
-        if radius > self.max_radius:
-            raise ValueError("radius too high in insert_sphere:")
-        radius_squared = radius ** 2
-        xmin, xmax, ymin, ymax, zmin, zmax = self.surrounding_box(center, radius)
-        for i, x_index in enumerate(range(xmin, xmax)):
-            x_pos = x_index * self.delta[0] + self.origin[0]
-            self.x_distance_buffer[i] = (center[0] - x_pos) ** 2
-        for i, y_index in enumerate(range(ymin, ymax)):
-            y_pos = y_index * self.delta[1] + self.origin[1]
-            self.y_distance_buffer[i] = (center[1] - y_pos) ** 2
-        for i, z_index in enumerate(range(zmin, zmax)):
-            z_pos = z_index * self.delta[2] + self.origin[2]
-            self.z_distance_buffer[i] = (center[2] - z_pos) ** 2
-
-        for i, x_index in enumerate(range(xmin, xmax)):
-            dx_squared = self.x_distance_buffer[i]
-            for j, y_index in enumerate(range(ymin, ymax)):
-                dy_squared = self.y_distance_buffer[j]
-                # Precompute some stuff before the innermost loop
-                # This helps a little bit, but not too much.
-                dxy_squared = dx_squared + dy_squared
-                # z_max_squared = radius_squared - dxy_squared
-                xy_index = (
-                    x_index * self.shape[1] * self.shape[2]
-                    + y_index * self.shape[2]
-                )
-                for k, z_index in enumerate(range(zmin, zmax)):
-                    dz_squared = self.z_distance_buffer[k]
-                    d_squared = dxy_squared + dz_squared
-                    index = xy_index + z_index
-                    is_closest = d_squared < radius_squared and d_squared < self.distance_buffer[index]
-                    if is_closest:
-                        self.index_buffer[index] = atomnum
-                        self.distance_buffer[index] = d_squared
-        return
-
-    def insert_spheres(self, centers, radius):
-        for i in range(len(centers)):
-            center = centers[i]
-            self.insert_sphere(center, radius, i)
-        return
-
-    def get_closest_spheres(self):
-        voxels_with_associated_atom = np.flatnonzero(self.distance_buffer != np.inf)
-        atom_indices = self.index_buffer[voxels_with_associated_atom]
-        squared_distances = self.distance_buffer[voxels_with_associated_atom]
-        return voxels_with_associated_atom, atom_indices, squared_distances
+            dx_dy_2 = dx_2 + dy_2
+            max_dz_2 = squared_radius - dx_dy_2
+            xyind = x_indices[i] * shape[1] * shape[2] + y_indices[j] * shape[2]
+            for k, dz_2 in enumerate(squared_z_dist):
+                if dz_2 <= max_dz_2:
+                    indices[output_pos] = xyind + z_indices[k]
+                    squared_distances[output_pos] = dx_dy_2 + dz_2
+                    output_pos += 1
+    return indices[:output_pos], squared_distances[:output_pos]
