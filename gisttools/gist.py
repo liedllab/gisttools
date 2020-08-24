@@ -314,7 +314,7 @@ class Gist:
         ...     'Eww_unref_dens': [-0.399056],
         ...     'Eww_unref_norm': [-9.9764]
         ... })
-        >>> gist = Gist(a, grid=Grid(0, 10, 0.5))
+        >>> gist = Gist(a, grid=Grid(0, 10, 0.5), eww_ref=0)
         >>> rho0 = gist.detect_rho()
         >>> f"{rho0:.4f}"
         '0.0329'
@@ -324,9 +324,10 @@ class Gist:
         # with ions, since there can be a voxel with no water but a lot of ions.
         # The calculated rho0 with ions is WRONG. But this way at least n_frames
         # works...
-        highest_pop_index = self[refcol].idxmax()
-        highest_pop = self.loc[highest_pop_index]
-        rho0 = highest_pop["Eww_unref_dens"] / highest_pop["Eww_unref_norm"] / highest_pop[refcol]
+        # highest_pop_index = self[refcol].idxmax()
+        # highest_pop = self.loc[highest_pop_index]
+        total = self.data.sum(0)
+        rho0 = total["Eww_unref_dens"] / total["Eww_unref_norm"] / total[refcol]
         return rho0
 
     def detect_frames(self, refcol='g_O'):
@@ -355,7 +356,7 @@ class Gist:
         ...     'Eww_unref_dens': [-0.399056],
         ...     'Eww_unref_norm': [-9.9764]
         ... })
-        >>> gist = Gist(a, grid=Grid(0, 10, 0.5))
+        >>> gist = Gist(a, grid=Grid(0, 10, 0.5), eww_ref=0)
         >>> frames = gist.detect_frames()
         >>> f"{frames}"
         '5000'
@@ -364,15 +365,16 @@ class Gist:
         voxel_volume = self.grid.voxel_volume
         # I used to use self['population'] here. This is unsafe when using GIST
         # with ions, since there can be a voxel with no water but a lot of ions.
-        highest_pop_index = self[refcol].idxmax()
-        highest_pop = self.loc[highest_pop_index]
+        # highest_pop_index = self[refcol].idxmax()
+        # highest_pop = self.loc[highest_pop_index]
         rho0 = self.rho0
         if pd.isna(rho0):
             rho0 = self.detect_rho()
         if pd.isna(rho0):
             raise ValueError('Cannot detect number of frames because rho0 is NaN and cannot be detected.')
+        total = self.data.sum(0)
         n_frames = np.int_(
-            np.round(highest_pop["population"] / rho0 / voxel_volume / highest_pop[refcol])
+            np.round(total["population"] / rho0 / voxel_volume / total[refcol])
         )
         return n_frames
 
@@ -805,7 +807,10 @@ class Gist:
 
         normalized_data = {}
         for col in columns:
-            values = self.loc[ind, col + col_suffix].values
+            if col == 'voxels':
+                values == np.ones_like(ind)
+            else:
+                values = self.loc[ind, col + col_suffix].values
             if cutoff_E != 0:
                 values[np.abs(values) < cutoff_E] = 0
             values *= self.grid.voxel_volume

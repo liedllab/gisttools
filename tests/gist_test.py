@@ -107,7 +107,7 @@ def test_construct_3x3x3_coords():
 
 def test_gist_from_dataframe():
     xyz = construct_3x3x100_coords()
-    gf = gist.Gist.from_dataframe(pd.DataFrame({
+    gf = gist.Gist(pd.DataFrame({
         'x': xyz[:, 0],
         'y': xyz[:, 1],
         'z': xyz[:, 2],
@@ -132,15 +132,16 @@ def test_projection_nearest_no_weight():
         [ 1,  0, 0],
         [ 1,  1, 0],
     ]]) * 0.1  # mdtraj calculates in nm.
-    gf = gist.Gist.from_dataframe(pd.DataFrame({
+    gf = gist.Gist(pd.DataFrame({
         'x': xyz[:, 0],
         'y': xyz[:, 1],
         'z': xyz[:, 2],
         'TEST_dens': np.ones(len(xyz)),
         'population': np.ones(len(xyz)),
     }), struct=mock_traj, rho0=1., n_frames=1)
-    proj = gf.projection_nearest(['TEST', 'voxel'], rmax=3.)
-    np.testing.assert_allclose(proj.TEST.values, [1])
+    for dist in range(4):
+        proj = gf.projection_nearest(['TEST', 'voxels'], rmax=dist)
+        np.testing.assert_allclose(proj.TEST.values, dist + 1)
 
 print("Running doctests ...")
 import doctest
