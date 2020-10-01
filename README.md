@@ -25,4 +25,4 @@ Optional dependencies (only for some functionality):
 * nglview (for previewing datasets)
 * gridDataFormats (for loading .dx files)
 
-You should be able to install gisttools in a local environment using `python3 setup.py install`. gisttools has been tested mainly on Pyton 3.7, but all versions >= 3.6 *should* work, so If you experience errors with any of those versions, feel free to contact me.
+You should be able to install gisttools in a local environment using `pip install .`. gisttools has been tested mainly on Pyton 3.7, but all versions >= 3.6 *should* work, so If you experience errors with any of those versions, feel free to contact me.
