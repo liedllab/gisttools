@@ -37,7 +37,7 @@ def gist_projection():
     if args.ewwref is None:
         print("WARNING: You did not supply a reference value for Eww.")
     combined_grid = load_grids(
-        gist_files=args.gistfile,
+        gist_file=args.gistfile,
         dx_files=args.dxfiles,
         Eww_ref=args.ewwref,
         ffmt=args.fileformat,

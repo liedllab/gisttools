@@ -326,8 +326,7 @@ class Gist:
         # works...
         # highest_pop_index = self[refcol].idxmax()
         # highest_pop = self.loc[highest_pop_index]
-        total = self.data.sum(0)
-        rho0 = total["Eww_unref_dens"] / total["Eww_unref_norm"] / total[refcol]
+        rho0 = (self["Eww_unref_dens"] / self["Eww_unref_norm"]).sum(0) / self[refcol].sum(0)
         return rho0
 
     def detect_frames(self, refcol='g_O'):
@@ -372,9 +371,8 @@ class Gist:
             rho0 = self.detect_rho()
         if pd.isna(rho0):
             raise ValueError('Cannot detect number of frames because rho0 is NaN and cannot be detected.')
-        total = self.data.sum(0)
         n_frames = np.int_(
-            np.round(total["population"] / rho0 / voxel_volume / total[refcol])
+            np.round(self["population"].sum() / rho0 / voxel_volume / self[refcol].sum())
         )
         return n_frames
 
