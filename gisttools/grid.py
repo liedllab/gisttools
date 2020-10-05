@@ -4,7 +4,6 @@ from .utils import cartesian_product
 import numba
 import warnings
 from textwrap import dedent
-from .shape_buffer import ShapeBuffer
 
 
 class Grid:
@@ -314,16 +313,6 @@ class Grid:
         # Both min_indices and max_indices are arrays of shape (3,)
         min_indices, max_indices = self.closest((xyzmin, xyzmax), out_of_bounds='closest')
         return [np.arange(imin, imax + 1) for imin, imax in zip(min_indices, max_indices)]
-
-    def get_shape_buffer(self):
-        """Get a ShapeBuffer instance according to this grid. Buffers will be
-        sized so that atoms up to a radius of max_radius can be inserted.
-        """
-        return ShapeBuffer(
-            origin=self.origin,
-            shape=self.shape,
-            delta=self.delta,
-        )
 
     def surrounding_sphere(self, center, radius):
         """Find voxels that lie within a sphere of 'radius' around the 'center'.
