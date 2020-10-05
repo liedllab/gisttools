@@ -1,6 +1,5 @@
 import numpy as np
 from .utils import cartesian_product
-# from numba import jitclass, int64, float64
 import numba
 import warnings
 from textwrap import dedent
@@ -31,7 +30,8 @@ class Grid:
         """
         self.origin = np.broadcast_to(np.asfarray(origin), (3,)).copy()
         self.shape = np.broadcast_to(np.asarray(shape), (3,)).copy()
-        assert issubclass(self.shape.dtype.type, np.integer), f'Grid dimensions must have an integer dtype, not {self.shape.dtype}'
+        assert issubclass(self.shape.dtype.type, np.integer), \
+            f'Grid dimensions must have an integer dtype, not {self.shape.dtype}'
         self.delta = np.broadcast_to(np.asfarray(delta), (3)).copy()
         self.voxel_volume = np.prod(self.delta)
         self.n_voxels = np.prod(self.shape)
@@ -136,13 +136,6 @@ class Grid:
         xyz_indices = np.asarray(xyz_indices).reshape(-1, 3)
         return np.ravel_multi_index(xyz_indices.T, self.shape)
 
-#         indices = (
-#             xyz_indices[:, 2]
-#             + xyz_indices[:, 1] * self.shape[2]
-#             + xyz_indices[:, 0] * (self.shape[1] * self.shape[2])
-#         )
-#         return indices
-
     def xyz_indices(self, indices):
         """Return indices in xyz directions from a linear index.
 
@@ -171,7 +164,7 @@ class Grid:
         ...     print("An error happened")
         An error happened
         """
-        indices = np.asarray(indices, dtype=int)
+        indices = np.asarray(indices, dtype=np.int)
         assert (
             len(indices.shape) < 2
         ), "Only 0- or 1-dimensional data can be used as indices."
@@ -257,7 +250,7 @@ class Grid:
         """
         xyz = np.asarray(xyz).reshape(-1, 3)
         normalized = (xyz - self.origin) / self.delta
-        indices = np.round(normalized).astype(np.int64)
+        indices = np.round(normalized).astype(np.int)
         if always_return:
             warnings.warn(
                 'always_return has been deprecated and will be removed. Use out_of_bounds="closest" instead',
@@ -513,7 +506,7 @@ class Grid:
         centers = np.asarray(centers).reshape(-1, 3)
         radii = np.broadcast_to(radii, centers.shape[0])
         current_smallest = np.full(self.n_voxels, np.inf, dtype=np.float64)
-        current_closest_center = np.full(self.n_voxels, -1, dtype=np.int64)
+        current_closest_center = np.full(self.n_voxels, -1, dtype=np.int)
         for i, (center, radius) in enumerate(zip(centers, radii)):
             ind, sqrdist = self._surrounding_sphere(center, rmax + radius)
             sphere_dist = np.sqrt(sqrdist) - radius
@@ -683,7 +676,7 @@ def combine_grids(grids):
         assert np.allclose(
             (grid.origin - xyzmin) % delta, [0, 0, 0]
         ), "Offset of origin values must be a multiple of the grid spacing."
-    shape = ((xyzmax - xyzmin) / delta).astype(np.int64)
+    shape = ((xyzmax - xyzmin) / delta).astype(np.int)
     return Grid(origin=xyzmin, shape=shape, delta=delta)
 
 
@@ -704,18 +697,23 @@ def _maximum(a, b):
 @numba.vectorize(nopython=True, cache=True)
 def _round(a):
     """Rounds to the nearest integer. In contrast to np.round, this returns an
-    integer array! This is needed because numba's np.round only supports the 
-    3-argument form."""
+    integer array! Numba's builtin np.round only supports the 3-argument form
+    (np.round_(a, decimals, out))."""
     return round(a)
 
 
-@numba.njit((
-    numba.int64[:],  # shape
-    numba.float64[:],  # delta
-    numba.float64[:],  # origin
-    numba.float64[:],  # center
-    numba.float64  # radius
-), cache=True)
+@numba.vectorize(nopython=True, cache=True)
+def ensure_int(a):
+    """Convert to int, and ensure that the original was an integer value or a
+    floating point representation of an integer.
+    """
+    out = np.int_(a)
+    if out != a:
+        raise ValueError("Non-int value!")
+    return out
+
+
+@numba.njit(cache=True)
 def _surrounding_box_edges(shape, delta, origin, center, radius):
     """Return a box with wall distance of radius to the center. shape, delta,
     and origin define the grid.
@@ -724,24 +722,18 @@ def _surrounding_box_edges(shape, delta, origin, center, radius):
     -------
     x, y, z: np.ndarray, 1D
     """
+    shape = ensure_int(shape)
     xyz_min = _round((center - radius - origin) / delta)
-    xyz_min = _maximum(xyz_min.astype(np.int64), np.array([0, 0, 0]))
+    xyz_min = _maximum(xyz_min.astype(np.int_), np.array([0, 0, 0]))
     xyz_max = _round((center + radius - origin) / delta)
-    xyz_max = _minimum(xyz_max.astype(np.int64), shape - 1)
-    x_ind = np.arange(xyz_min[0], xyz_max[0] + 1, dtype=np.int64)
-    y_ind = np.arange(xyz_min[1], xyz_max[1] + 1, dtype=np.int64)
-    z_ind = np.arange(xyz_min[2], xyz_max[2] + 1, dtype=np.int64)
+    xyz_max = _minimum(xyz_max.astype(np.int_), shape - 1)
+    x_ind = np.arange(xyz_min[0], xyz_max[0] + 1, dtype=np.int_)
+    y_ind = np.arange(xyz_min[1], xyz_max[1] + 1, dtype=np.int_)
+    z_ind = np.arange(xyz_min[2], xyz_max[2] + 1, dtype=np.int_)
     return x_ind, y_ind, z_ind
 
 
-@numba.njit((
-    numba.float64[:],  # origin
-    numba.int64[:],  # shape
-    numba.float64[:],  # delta
-    numba.float64[:],  # center
-    numba.float64  # radius
-))
-# ), cache=True, fastmath=True)
+@numba.njit(cache=True)
 def _surrounding_sphere(
     origin,
     shape,
@@ -758,13 +750,14 @@ def _surrounding_sphere(
     indices : np.ndarray, shape=(n_voxels, ), dtype=int
     distances : np.ndarray, shape=(n_voxels, ), dtype=float
     """
+    # surrounding_box_edges tests that shape is int
     x_indices, y_indices, z_indices = _surrounding_box_edges(shape, delta, origin, center, radius)
     squared_x_dist = (x_indices * delta[0] + (origin[0] - center[0]))**2
     squared_y_dist = (y_indices * delta[1] + (origin[1] - center[1]))**2
     squared_z_dist = (z_indices * delta[2] + (origin[2] - center[2]))**2
     squared_radius = radius ** 2
     max_output_size = len(squared_x_dist) * len(squared_y_dist) * len(squared_z_dist)
-    indices = np.zeros((max_output_size), dtype=np.int64)
+    indices = np.zeros((max_output_size), dtype=np.int_)
     squared_distances = np.zeros((max_output_size), dtype=np.float64)
     output_pos = 0
     for i, dx_2 in enumerate(squared_x_dist):

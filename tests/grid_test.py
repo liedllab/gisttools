@@ -2,6 +2,8 @@
 
 import gisttools.grid as grid
 import numpy as np
+import pytest
+import numba
 
 example_grid_100 = grid.Grid(-50., 101, 1)
 example_grid_long = grid.Grid(0, [1000, 1, 1], 1.)
@@ -40,6 +42,25 @@ def test_surrounding_sphere_np_and_numba_equal():
         np_result = example_grid_100.surrounding_sphere_np(test_point, test_radius)
         np.testing.assert_array_equal(numba_result[0], np_result[0])
         np.testing.assert_allclose(numba_result[1], np_result[1])
+
+def test_ensure_int():
+    a = np.array([5.0, 4.0, -2.0])
+    out_a = grid.ensure_int(a)
+    assert np.issubdtype(out_a.dtype, np.integer)
+    np.testing.assert_array_equal(a, out_a)
+
+    b = np.array([5.0, 4.1, -2.0])
+    with pytest.raises(ValueError, match="Non-int value"):
+        grid.ensure_int(b)
+
+def test_numba_int_div_returns_float():
+    @numba.njit()
+    def divide(a, b):
+        return a / b
+    out = divide(3, 2)
+    assert out == pytest.approx(1.5)
+    out_b = divide(np.array([1, 2, 3]), np.array([2, 2, 2]))
+    np.testing.assert_allclose(out_b, np.array([0.5, 1, 1.5]))
 
 print("Running doctests ...")
 import doctest
