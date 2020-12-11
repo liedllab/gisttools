@@ -52,6 +52,10 @@ class Grid:
         warnings.warn('Grid.xyzspcn has been renamed to Grid.delta', DeprecationWarning)
         return self.delta
 
+    @property
+    def size(self):
+        return np.prod(self.shape)
+
     def __repr__(self):
         return f"Grid(origin={self.origin}, shape={self.shape}, delta={self.delta})"
 
@@ -273,6 +277,28 @@ class Grid:
                 indices[rows] = -1
                 return indices
         return indices
+
+    def assign(self, xyz):
+        """Get raveled (flat) indices of each row of xyz
+
+        Returns -1 for coordinates outside of the grid.
+
+        Parameters
+        ----------
+        xyz: np.ndarray, shape=(n_atoms, 3)
+
+        Returns
+        -------
+        indices: np.ndarray, shape=(n_atoms,), dtype=int
+        """
+        xyz = np.atleast_2d(xyz)
+        assert len(xyz.shape) == 2 and xyz.shape[1] == 3, \
+            "Can only assign indices to (n x 3) arrays, but shape is " + str(xyz.shape)
+        vox_3d = self.closest(xyz, out_of_bounds='dummy')
+        out = np.ravel_multi_index(vox_3d.T, self.shape, mode='wrap')
+        invalid = np.nonzero(vox_3d == -1)[0]
+        out[invalid] = -1
+        return out
 
     def surrounding_box(self, center, radius):
         """Find voxels that form a box around 'center', that contains all
@@ -574,6 +600,33 @@ class Grid:
         assert np.prod(shape) == xyz.shape[0], \
             f'shape {shape} is inconsistent with voxel count {xyz.shape[0]}.'
         return cls(origin, shape, delta)
+
+    def save_dx(self, data, filename, colname="DATA"):
+        """Save a single GIST column to an OpenDX file.
+
+        Parameters
+        ----------
+        data: np.ndarray
+            Data to save
+        filename : str or file handle
+            The output file
+
+        Returns
+        -------
+        None
+        """
+        data = np.asarray(data).ravel()
+        assert data.size == self.size, f"Data size ({data.size}) must fit Grid size ({self.size})."
+        np.savetxt(
+            filename,
+            data,
+            header=self.dxheader(),
+            footer=self.dxfooter(colname),
+            comments='',
+            fmt='%f'
+        )
+        return
+
 
 
 def grid_from_xyz(xyz):

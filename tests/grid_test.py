@@ -43,6 +43,13 @@ def test_surrounding_sphere_np_and_numba_equal():
         np.testing.assert_array_equal(numba_result[0], np_result[0])
         np.testing.assert_allclose(numba_result[1], np_result[1])
 
+def test_assign():
+    gd = grid.Grid(0, 4, 1)
+    assert gd.assign([0, 1, 0]) == 4
+    assert gd.assign([1, 0, 0]) == 16
+    assert gd.assign([1, 3.6, 0]) == -1
+    assert gd.assign([-0.6, 0, 0]) == -1
+
 def test_ensure_int():
     a = np.array([5.0, 4.0, -2.0])
     out_a = grid.ensure_int(a)

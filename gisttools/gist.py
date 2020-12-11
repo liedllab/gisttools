@@ -1103,14 +1103,15 @@ class Gist:
         """
         assert isinstance(column, str), 'save_dx requires a single column name as input.'
         data = self[column].values
-        np.savetxt(
-            filename,
-            data,
-            header=self.grid.dxheader(),
-            footer=self.grid.dxfooter(column),
-            comments='',
-            fmt='%f'
-        )
+        self.grid.save_dx(filename, data, column)
+        # np.savetxt(
+        #     filename,
+        #     data,
+        #     header=self.grid.dxheader(),
+        #     footer=self.grid.dxfooter(column),
+        #     comments='',
+        #     fmt='%f'
+        # )
         return
 
     def _recipe_eww_norm(self, index):
@@ -1294,6 +1295,7 @@ def load_dx(
     struct=None,
     strip_H=False,
     eww_ref=None,
+    colname=None,
 ):
     """Return a Gist instance by loading an OpenDX file from disk.
 
@@ -1314,6 +1316,9 @@ def load_dx(
     eww_ref : float
         Reference water-water interaction energy. Should be -9.533 for TIP3P.
         This has to be supplied to get useful results!!!
+    colname : str or None
+        How the single column in the Gist object should be called. Default: the
+        basename of the filename.
 
     Returns
     -------
@@ -1327,8 +1332,9 @@ def load_dx(
         shape=np.array([len(x) for x in infile.edges])-1,
         delta=infile.delta
     )
-    basename = os.path.splitext(os.path.basename(filename))[0]
-    data = pd.DataFrame.from_dict({basename: np.reshape(infile.grid, (-1))})
+    if colname is None:
+        colname = os.path.splitext(os.path.basename(filename))[0]
+    data = pd.DataFrame.from_dict({colname: np.reshape(infile.grid, (-1))})
     if struct is not None:
         struct_md = md.load_frame(struct, 0)
     else:
