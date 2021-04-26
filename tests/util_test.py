@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import gzip
-from gisttools.utils import open_maybe_gzipped, distance_weight, cartesian_product
+from gisttools.utils import open_maybe_gzipped, distance_weight, cartesian_product, scale_to
 import os
 import numpy as np
 
@@ -45,3 +45,8 @@ def test_cartesian_product():
     )
     np.testing.assert_array_equal(ab, ab_expected)
     np.testing.assert_array_equal(abc, abc_expected)
+
+def test_scale_to():
+    a = np.array([-40, 50])
+    scale = [3, 4]
+    assert np.allclose(scale_to(a, scale), scale)

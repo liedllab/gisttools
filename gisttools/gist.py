@@ -1066,7 +1066,7 @@ class Gist:
             atomic_radii=atomic_radii,
             col_suffix=col_suffix,
         )
-        return bins, [rdf.sum(0) for rdf in rdfs]
+        return bins, [rdf.sum(0).rename(col) for rdf, col in zip(rdfs, cols)]
 
     def norm2dens(self, data, index=slice(None)):
         """Convert an arbitrary data column from a _norm quantity to a _dens quanity."""
@@ -1103,7 +1103,7 @@ class Gist:
         """
         assert isinstance(column, str), 'save_dx requires a single column name as input.'
         data = self[column].values
-        self.grid.save_dx(filename, data, column)
+        self.grid.save_dx(data, filename, column)
         # np.savetxt(
         #     filename,
         #     data,

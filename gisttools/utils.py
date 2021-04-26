@@ -5,6 +5,7 @@ import tempfile
 import string
 import os
 import gzip
+from typing import Tuple
 
 
 def open_maybe_gzipped(filename, mode='rt'):
@@ -19,70 +20,7 @@ def open_maybe_gzipped(filename, mode='rt'):
     return opener(filename, mode)
 
 
-def preview_dataset_slow(struct, dataset, view=None, crange=None, cmap='YlGnBu', mode='atom', indices=None, label='preview'):
-    """Create a colored surface in a nglview widget.  This function creates a
-    new _ColorScheme object.  For large systems, this takes a while.
-
-    Parameters
-    ----------
-    dataset : numpy array
-        Numpy array with numbers to color the surface from.  Could be a
-        column of the output of schauperl_projection.
-    view : nglview widget
-        If None, a new widget is created.
-    crange : tuple
-        Minimum and maximum value for the coloring.  Default: smallest and
-        largest values of the dataset.
-    cmap : str
-        String representation of a matplotlib color map, that is used to define
-        the surface colors.
-    label : str
-        Label for the nglview _ColorScheme
-
-    Returns
-    -------
-    updated_view : nglview.NGLWidget
-
-    """
-    import nglview as _nv
-    from matplotlib.cm import ScalarMappable
-    if crange is None:
-        cmin = np.min(dataset)
-        cmax = np.max(dataset)
-    else:
-        cmin, cmax = crange
-    if view is None:
-        view = _nv.show_mdtraj(struct, gui=True)
-    colors = ScalarMappable(cmap=cmap)
-    colors.set_clim(-cmax, -cmin)
-    rgbvals = (colors.to_rgba(-dataset) * 256).astype(np.int)
-    if mode == 'atom':
-        if indices is None:
-            indices = range(dataset.shape[0])
-        rgbtext = [
-            [
-                '#{:02X}{:02X}{:02X}'.format(*rgbvals[i]),
-                '@{}'.format(index)
-            ] for i, index in enumerate(indices)
-        ]
-    elif mode == 'residue':
-        if indices is None:
-            indices = range(struct.top.n_residues)
-        rgbtext = [
-            [
-                '#{:02X}{:02X}{:02X}'.format(*rgbvals[i]),
-                '{}'.format(index)
-            ] for i, index in enumerate(indices)
-        ]
-    else:
-        raise ValueError('Mode is {}, should be \'atom\' or \'residue\''.format(mode))
-    rgbtext.append(['white', '*'])
-    scheme = _nv.color._ColorScheme(rgbtext, label=label)
-    view.add_surface(color=scheme)
-    return view
-
-
-def preview_dataset_fast(struct, dataset, maximal_crange=None, view=None, cmap="YlGnBu"):
+def preview_dataset(struct, dataset, crange='scale', view=None, cmap="YlGnBu"):
     """Create a colored surface in a nglview widget.  This function writes a
     temporary .pdb file (GISTFILE_TEMP.pdb) in the current folder, with the
     dataset in the bfactor.  It has less control of the coloring than
@@ -95,10 +33,12 @@ def preview_dataset_fast(struct, dataset, maximal_crange=None, view=None, cmap="
         column of the output of schauperl_projection.
     view : nglview widget
         If None, a new widget is created.
-    maximal_crange : tuple
-        Minimum and maximum value for the coloring.  Default: smallest and
-        largest values of the dataset.  Note: the actual color range can still
-        be smaller, but not larger than maximal_crange.
+    crange : 'scale' or tuple
+        If crange is a tuple, it defines the minimum and maximum value for the
+        coloring. If is is 'scale' (the default), scales the dataset to the
+        limits for PDB B-Factors (-9.99 to 99.99)
+    cmap : str
+        Colormap name. Will be passed to nglview.
 
     Returns
     -------
@@ -107,36 +47,38 @@ def preview_dataset_fast(struct, dataset, maximal_crange=None, view=None, cmap="
     """
     import nglview as _nv
     if view is None:
-        view = _nv.NGLWidget(gui=True)
-
-    if maximal_crange is not None:
-        cut_min, cut_max = maximal_crange
-        dataset = np.clip(dataset, cut_min, cut_max)
-
-    minval, maxval = np.min(dataset), np.max(dataset)
-    scale1, scale2 = 1, 1
-    if minval < -9.99:
-        scale1 = minval / -9.99
-    if maxval > 99.99:
-        scale2 = maxval / 99.99
-    scale = np.max((scale1, scale2))
-    dataset = dataset / scale
-    print("GistFile.preview: Color range from {:.2f} to {:.2f}.".format(minval, maxval))
-
-    tempfile = TemporaryFileName(prefix='PREVIEW-', suffix='.pdb')
-    struct.save_pdb(tempfile.filename, force_overwrite=True, bfactors=dataset)
-    view.add_component(tempfile.filename)
-    # view.add_surface(color='bfactor')
+        view = _nv.NGLWidget()
+    if crange == 'scale':
+        crange = (-9.99, 99.99)
+        dataset = scale_to(dataset, crange)
+    else:
+        if crange[0] < -9.99 or crange[1] > 99.99:
+            raise ValueError("crange is out of the PDB limitations for B-Factors")
+        dataset = np.clip(dataset, -9.99, 99.99)
+    with tempfile.TemporaryDirectory() as tmp:
+        filename = os.path.join(tmp, 'tmp.pdb')
+        struct.save_pdb(filename, bfactors=dataset)
+        view.add_component(filename)
     view.set_representations(representations=[{
         'type': 'surface',
         'params': {
             'colorScheme': 'bfactor',
             'colorScale': cmap,
-            'colorReverse': True
+            'colorReverse': True,
+            'colorDomain': crange,
         }
     }])
-    # Tempfile goes out of scope and deletes the PREVIEW-...pdb file
     return view
+
+
+def scale_to(a, domain: Tuple[float]) -> np.ndarray:
+    """Scale array a to fit into scale."""
+    a = np.asarray(a)
+    d_min, d_max = domain
+    a_min, a_max = np.min(a), np.max(a)
+    scale = (d_max - d_min) / (a_max - a_min)
+    offset = -a_min * scale + d_min
+    return a * scale + offset
 
 
 class ProgressPrinter():
@@ -177,30 +119,6 @@ class ProgressPrinter():
         sys.stdout.write('\n')
         sys.stdout.flush()
         return None
-
-
-class TemporaryFileName():
-    """Creates a random filename that can be used for a temporary file.  When
-    the object is deleted, checks if the file exists and deletes it.  This is
-    necessary mainly because mdtraj.save_pdb only uses filenames, no file
-    objects."""
-
-    def __init__(self, prefix='', suffix='', size=6, chars=string.ascii_uppercase + string.digits):
-        dirname = tempfile.gettempdir()
-        random_name = ''.join(random.choice(chars) for _ in range(size))
-        self.filename = dirname + '/' + prefix + random_name + suffix
-        return None
-
-    def __del__(self):
-        if os.path.isfile(self.filename):
-            os.remove(self.filename)
-        return None
-
-    def __repr__(self):
-        return "TemporaryFileName: {}".format(self.filename)
-
-    def __str__(self):
-        return self.filename
 
 
 def cartesian_product(*xi):
