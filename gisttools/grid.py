@@ -28,14 +28,39 @@ class Grid:
             use the same in all directions.
 
         """
-        self.origin = np.broadcast_to(np.asfarray(origin), (3,)).copy()
-        self.shape = np.broadcast_to(np.asarray(shape), (3,)).copy()
-        assert issubclass(self.shape.dtype.type, np.integer), \
-            f'Grid dimensions must have an integer dtype, not {self.shape.dtype}'
-        self.delta = np.broadcast_to(np.asfarray(delta), (3)).copy()
+        self.origin = self.broadcast_origin(origin)
+        self.shape = self.broadcast_shape(shape)
+        self.delta = self.broadcast_delta(delta)
         self.voxel_volume = np.prod(self.delta)
-        self.n_voxels = np.prod(self.shape)
         return
+
+    @staticmethod
+    def broadcast_origin(origin):
+        return np.broadcast_to(np.asfarray(origin), (3,)).copy()
+
+    @staticmethod
+    def broadcast_shape(shape):
+        out = np.broadcast_to(np.asarray(shape), (3,)).copy()
+        if not issubclass(out.dtype.type, np.integer):
+            raise TypeError(f'Grid dimensions must have an integer dtype, not {out.dtype}')
+        return out
+
+    @staticmethod
+    def broadcast_delta(delta):
+        return np.broadcast_to(np.asfarray(delta), (3)).copy()
+
+    @classmethod
+    def centered(cls, center, shape, delta):
+        """Return a Grid instance centered at *center*
+
+        See __init__ for Parameters
+        """
+        center = cls.broadcast_origin(center)
+        shape = cls.broadcast_shape(shape)
+        delta = cls.broadcast_delta(delta)
+        extent = (shape-1) * delta
+        origin = center - extent / 2.
+        return cls(origin, shape, delta)
 
     @property
     def xyz0(self):
@@ -51,6 +76,11 @@ class Grid:
     def xyzspcn(self):
         warnings.warn('Grid.xyzspcn has been renamed to Grid.delta', DeprecationWarning)
         return self.delta
+
+    @property
+    def n_voxels(self):
+        warnings.warn('Grid.n_voxels has been renamed to Grid.size', DeprecationWarning)
+        return self.size
 
     @property
     def size(self):
@@ -101,7 +131,7 @@ class Grid:
             delta 0 {self.delta[1]} 0
             delta 0 0 {self.delta[2]}
             object 2 class gridconnections counts {self.shape[0]} {self.shape[1]} {self.shape[2]}
-            object 3 class array type double rank 0 items {self.n_voxels} data follows''')
+            object 3 class array type double rank 0 items {self.size} data follows''')
 
     @staticmethod
     def dxfooter(name='Unknown'):
@@ -169,7 +199,7 @@ class Grid:
         ...     print("An error happened")
         An error happened
         """
-        indices = np.asarray(indices, dtype=np.int)
+        indices = np.asarray(indices, dtype=int)
         assert (
             len(indices.shape) < 2
         ), "Only 0- or 1-dimensional data can be used as indices."
@@ -255,7 +285,7 @@ class Grid:
         """
         xyz = np.asarray(xyz).reshape(-1, 3)
         normalized = (xyz - self.origin) / self.delta
-        indices = np.round(normalized).astype(np.int)
+        indices = np.round(normalized).astype(int)
         if always_return:
             warnings.warn(
                 'always_return has been deprecated and will be removed. Use out_of_bounds="closest" instead',
@@ -454,8 +484,8 @@ class Grid:
         True
         """
         centers = np.asarray(centers).reshape(-1, 3)
-        current_smallest = np.full(self.n_voxels, np.inf)
-        current_closest_center = np.full(self.n_voxels, -1)
+        current_smallest = np.full(self.size, np.inf)
+        current_closest_center = np.full(self.size, -1)
         for i, center in enumerate(centers):
             ind, sqrdist = self._surrounding_sphere(center, rmax)
             smaller = sqrdist < current_smallest[ind]
@@ -532,8 +562,8 @@ class Grid:
         # (non-squared) distances.
         centers = np.asarray(centers).reshape(-1, 3)
         radii = np.broadcast_to(radii, centers.shape[0])
-        current_smallest = np.full(self.n_voxels, np.inf, dtype=np.float64)
-        current_closest_center = np.full(self.n_voxels, -1, dtype=np.int)
+        current_smallest = np.full(self.size, np.inf, dtype=np.float64)
+        current_closest_center = np.full(self.size, -1, dtype=int)
         for i, (center, radius) in enumerate(zip(centers, radii)):
             ind, sqrdist = self._surrounding_sphere(center, rmax + radius)
             sphere_dist = np.sqrt(sqrdist) - radius
@@ -730,7 +760,7 @@ def combine_grids(grids):
         assert np.allclose(
             (grid.origin - xyzmin) % delta, [0, 0, 0]
         ), "Offset of origin values must be a multiple of the grid spacing."
-    shape = ((xyzmax - xyzmin) / delta).astype(np.int)
+    shape = ((xyzmax - xyzmin) / delta).astype(int)
     return Grid(origin=xyzmin, shape=shape, delta=delta)
 
 

@@ -168,7 +168,7 @@ class Gist:
         ----------
         data : pandas DataFrame
             The raw data. Can still be modified after initialization. The length of all
-            data rows must be equal to grid.n_voxels
+            data rows must be equal to grid.size
         grid : grid.Grid instance
             The Grid information.
         struct : mdtraj Trajectory
@@ -558,7 +558,7 @@ class Gist:
             rmax=rmin,
             atomic_radii=atomic_radii
         )
-        far_away = np.ones(self.grid.n_voxels, dtype=bool)
+        far_away = np.ones(self.grid.size, dtype=bool)
         far_away[voxels_within_rmin] = False
         if isinstance(non_water_density_cols, str):
             non_water_density_cols = [non_water_density_cols]
@@ -1368,9 +1368,9 @@ def combine_gists(gists):
     if len(gists) == 1:
         return gists[0]
     new_grid = combine_grids([gist.grid for gist in gists])
-    new_data = pd.DataFrame(index=np.arange(new_grid.n_voxels))
+    new_data = pd.DataFrame(index=np.arange(new_grid.size))
     for gist in gists:
-        xyz = gist.grid.xyz(np.arange(gist.grid.n_voxels))
+        xyz = gist.grid.xyz(np.arange(gist.grid.size))
         indices = new_grid.flat_indices(new_grid.closest(xyz))
         for key in gist.data.keys():
             new_data.loc[indices, key] = gist.data[key]

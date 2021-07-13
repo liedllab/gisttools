@@ -8,6 +8,11 @@ import numba
 example_grid_100 = grid.Grid(-50., 101, 1)
 example_grid_long = grid.Grid(0, [1000, 1, 1], 1.)
 
+def test_init_checks_int_for_shape():
+    with pytest.raises(TypeError):
+        wrong_shape = 5.
+        grid.Grid(0, wrong_shape, 1)
+
 def test_surrounding_box_with_long_example_with_extra_space():
     for boxlen in range(10):
         # Adding 0.01 to avoid the border being exacly on a voxel center. 
@@ -68,6 +73,10 @@ def test_numba_int_div_returns_float():
     assert out == pytest.approx(1.5)
     out_b = divide(np.array([1, 2, 3]), np.array([2, 2, 2]))
     np.testing.assert_allclose(out_b, np.array([0.5, 1, 1.5]))
+
+def test_centered_grid():
+    gd = grid.Grid.centered(0, 11, 1.)
+    assert np.allclose(-gd.origin, gd.xyzmax)
 
 print("Running doctests ...")
 import doctest
