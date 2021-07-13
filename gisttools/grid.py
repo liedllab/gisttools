@@ -93,9 +93,10 @@ class Grid:
 
     def dxheader(self):
         """Return simple OpenDX header for a single data row."""
+        origin = self.origin - self.delta / 2
         return dedent(f'''\
             object 1 class gridpositions counts {self.shape[0]} {self.shape[1]} {self.shape[2]}
-            origin {self.origin[0]} {self.origin[1]} {self.origin[2]}
+            origin {origin[0]} {origin[1]} {origin[2]}
             delta {self.delta[0]} 0 0
             delta 0 {self.delta[1]} 0
             delta 0 0 {self.delta[2]}
