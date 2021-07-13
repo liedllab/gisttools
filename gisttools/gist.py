@@ -956,7 +956,7 @@ class Gist:
             atomic_radii=atomic_radii,
             col_suffix=col_suffix,
         )
-        return bins, rdf.sum(0)
+        return bins, rdf.sum(0).rename(column)
 
     def per_atom_rdf(
         self,
@@ -1066,7 +1066,7 @@ class Gist:
             atomic_radii=atomic_radii,
             col_suffix=col_suffix,
         )
-        return bins, [rdf.sum(0).rename(col) for rdf, col in zip(rdfs, cols)]
+        return bins, [rdf.sum(0).rename(col) for rdf, col in zip(rdfs, columns)]
 
     def norm2dens(self, data, index=slice(None)):
         """Convert an arbitrary data column from a _norm quantity to a _dens quanity."""
