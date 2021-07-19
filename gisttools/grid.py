@@ -34,6 +34,18 @@ class Grid:
         self.voxel_volume = np.prod(self.delta)
         return
 
+    def scale(self, n):
+        return self.__class__(self.origin*n, self.shape, self.delta*n)
+
+    def coarse_grain(self, n):
+        origin = self.origin + (n-1)/2 * self.delta
+        shape = self.shape // n
+        delta = self.delta * n
+        new = self.__class__(origin, shape, delta)
+        if self.size / new.size != n**3:
+            raise ValueError("Old and coarse-grained grids don't have matching sizes. Probably the shape is not divisible by n.")
+        return new
+
     @staticmethod
     def broadcast_origin(origin):
         return np.broadcast_to(np.asfarray(origin), (3,)).copy()
@@ -123,7 +135,7 @@ class Grid:
 
     def dxheader(self):
         """Return simple OpenDX header for a single data row."""
-        origin = self.origin - self.delta / 2
+        origin = self.origin
         return dedent(f'''\
             object 1 class gridpositions counts {self.shape[0]} {self.shape[1]} {self.shape[2]}
             origin {origin[0]} {origin[1]} {origin[2]}
@@ -231,11 +243,9 @@ class Grid:
         array([[-100.,  -99., -100.]])
         >>> a.xyz([[0, 2, 0]])
         array([[-100.,  -98., -100.]])
-        >>> try:
-        ...     a.xyz(27)
-        ... except ValueError:
-        ...     print("An error happened")
-        An error happened
+        >>> a.xyz(27)
+        Traceback (most recent call last):
+        ValueError: ...
         """
         indices = np.asarray(indices, dtype=int)
         if len(indices.shape) < 2:
@@ -243,7 +253,7 @@ class Grid:
         assert indices.shape[1] == 3, "Shape of indices must be (n_indices, 3)"
         return indices * self.delta + self.origin
 
-    def closest(self, xyz, always_return=False, out_of_bounds='raise'):
+    def closest(self, xyz, out_of_bounds='raise'):
         """Get unraveled xyz indices of the closest voxel.
 
         Parameters
@@ -256,9 +266,6 @@ class Grid:
             always_return option), 'ignore' will return invalid voxel indices, and 'dummy' will
             replace the respective xyz indices with -1 in all 3 columns (in lack of an
             integer version of np.nan)
-        always_return : bool
-            if always_return is True, always find the closest voxel even if xyz is out
-            of the grid. Otherwise, raise a RuntimeError. Deprecated and will be removed.
 
         Returns
         -------
@@ -272,42 +279,29 @@ class Grid:
         ...            [-1.4, 1, 1.4]])
         array([[1, 1, 1],
                [0, 2, 2]])
-        >>> try:
-        ...     a.closest([2., 2., 2.])
-        ... except RuntimeError:
-        ...     print("An error happened")
-        An error happened
-        >>> try:
-        ...     a.closest([2., 2., 2.], out_of_bounds='closest')
-        ... except RuntimeError:
-        ...     print("An error happened")
+        >>> a.closest([2., 2., 2.])
+        Traceback (most recent call last):
+        ValueError: Out of bounds index in Grid.closest
+        >>> a.closest([2., 2., 2.], out_of_bounds='closest')
         array([[2, 2, 2]])
         """
         xyz = np.asarray(xyz).reshape(-1, 3)
         normalized = (xyz - self.origin) / self.delta
         indices = np.round(normalized).astype(int)
-        if always_return:
-            warnings.warn(
-                'always_return has been deprecated and will be removed. Use out_of_bounds="closest" instead',
-                DeprecationWarning
-            )
-            indices = np.minimum(np.maximum(indices, 0), self.shape - 1)
-            return indices
         if out_of_bounds == 'ignore':
             return indices
-        too_small = indices < 0
-        too_big = indices >= self.shape
-        if np.any(too_small) or np.any(too_big):
-            if out_of_bounds == 'closest':
-                return np.minimum(np.maximum(indices, 0), self.shape - 1)
-            elif out_of_bounds == 'raise':
-                rows = np.nonzero(np.logical_or(too_small, too_big))[0]
-                raise RuntimeError(f"indices[{rows[0]}] is out of bounds.")
-            elif out_of_bounds == 'dummy':
-                rows = np.nonzero(np.logical_or(too_small, too_big))[0][:, np.newaxis]
-                indices[rows] = -1
-                return indices
-        return indices
+        elif out_of_bounds == 'closest':
+            return np.clip(indices, 0, self.shape-1)
+        elif out_of_bounds == 'raise':
+            if np.any(indices < 0) or np.any(indices >= self.shape):
+                raise ValueError('Out of bounds index in Grid.closest')
+            return indices
+        elif out_of_bounds == 'dummy':
+            rows = np.any(np.logical_or(indices < 0, indices >= self.shape), axis=1)
+            indices[rows] = -1
+            return indices
+        else:
+            raise ValueError(f'Unknown value for out_of_bounds: {out_of_bounds}')
 
     def assign(self, xyz):
         """Get raveled (flat) indices of each row of xyz
@@ -385,18 +379,17 @@ class Grid:
         Examples
         --------
         >>> a = Grid(origin=-1., shape=3, delta=1.)
-        >>> testdist = .5 * np.sqrt(3)
         >>> ind, dist = a.surrounding_sphere([.5, .5, .5], .99) # rounding problems when using 1
         >>> print(ind)
         [13 14 16 17 22 23 25 26]
-        >>> np.allclose(dist, testdist)
+        >>> np.allclose(dist, .5 * np.sqrt(3))
         True
         >>> print(a.surrounding_sphere([.5, .5, .5], .7)[0])
         []
         >>> ind, dist = a.surrounding_sphere([1.5, 1.5, 1.5], 1) # center outside of the box
         >>> print(ind)
         [26]
-        >>> np.allclose(dist, testdist)
+        >>> np.allclose(dist, .5 * np.sqrt(3))
         True
         """
         ind, sqrdist = self._surrounding_sphere(center, radius)
@@ -748,10 +741,7 @@ def combine_grids(grids):
     AssertionError: Offset of origin values must be a multiple of the grid spacing.
     """
     xyzmin = np.min([grid.origin for grid in grids], axis=0)
-    # xyzmax is different from self.xyzmax by one.
-    # This is correct, because otherwise we would have to add one when calculating the
-    # new shape.
-    xyzmax = np.max([grid.origin + grid.delta * grid.shape for grid in grids], axis=0)
+    xyzmax = np.max([grid.xyzmax for grid in grids], axis=0)
     delta = grids[0].delta
     for grid in grids:
         assert np.allclose(
@@ -760,7 +750,7 @@ def combine_grids(grids):
         assert np.allclose(
             (grid.origin - xyzmin) % delta, [0, 0, 0]
         ), "Offset of origin values must be a multiple of the grid spacing."
-    shape = ((xyzmax - xyzmin) / delta).astype(int)
+    shape = ((xyzmax - xyzmin) / delta + 1).astype(int)
     return Grid(origin=xyzmin, shape=shape, delta=delta)
 
 

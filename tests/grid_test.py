@@ -8,6 +8,29 @@ import numba
 example_grid_100 = grid.Grid(-50., 101, 1)
 example_grid_long = grid.Grid(0, [1000, 1, 1], 1.)
 
+def test_grid_closest():
+    gd = grid.Grid(-50, 101, 1)
+    assert np.allclose(gd.closest([.4, .9, .3]), [[50, 51, 50]])
+    oob = np.array([51., 0., 0.])
+    with pytest.raises(ValueError):
+        gd.closest(oob)
+    assert np.allclose(gd.closest(oob, out_of_bounds='closest'), [[100, 50, 50]])
+    assert np.allclose(gd.closest(oob, out_of_bounds='dummy'), [[-1, -1, -1]])
+    assert np.allclose(gd.closest(oob, out_of_bounds='ignore'), [[101, 50, 50]])
+
+def test_grid_coarse_grain():
+    gd = grid.Grid(-45, 102, 1)
+    for i in (1, 2, 3):
+        cg = gd.coarse_grain(i)
+        # same grid volume
+        assert np.isclose(gd.size * gd.voxel_volume, cg.size * cg.voxel_volume)
+        # same center
+        assert np.allclose(gd.origin + gd.xyzmax, cg.origin + cg.xyzmax)
+        # shifted origin
+        assert np.allclose(gd.origin - gd.delta / 2, cg.origin - cg.delta / 2)
+    with pytest.raises(ValueError):
+        gd.coarse_grain(4)
+
 def test_init_checks_int_for_shape():
     with pytest.raises(TypeError):
         wrong_shape = 5.
@@ -77,9 +100,3 @@ def test_numba_int_div_returns_float():
 def test_centered_grid():
     gd = grid.Grid.centered(0, 11, 1.)
     assert np.allclose(-gd.origin, gd.xyzmax)
-
-print("Running doctests ...")
-import doctest
-doctest.testmod(grid)
-
-print("Finished running doctests.")

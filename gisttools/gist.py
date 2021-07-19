@@ -1328,7 +1328,7 @@ def load_dx(
     import mdtraj as md
     infile = gd.Grid(filename)
     grid = Grid(
-        origin=infile.origin + infile.delta/2,
+        origin=infile.origin,
         shape=np.array([len(x) for x in infile.edges])-1,
         delta=infile.delta
     )
