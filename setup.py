@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="gisttools",
-    version="0.1",
+    version="0.2",
     description="Tools to process and visualize GIST results from cpptraj.",
     author="Franz Waibl",
     author_email="franz.waibl@uibk.ac.at",
