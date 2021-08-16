@@ -3,6 +3,7 @@ from .utils import cartesian_product
 import numba
 import warnings
 from textwrap import dedent
+import math
 
 
 class Grid:
@@ -303,7 +304,7 @@ class Grid:
         else:
             raise ValueError(f'Unknown value for out_of_bounds: {out_of_bounds}')
 
-    def assign(self, xyz):
+    def _assign(self, xyz):
         """Get raveled (flat) indices of each row of xyz
 
         Returns -1 for coordinates outside of the grid.
@@ -324,6 +325,15 @@ class Grid:
         invalid = np.nonzero(vox_3d == -1)[0]
         out[invalid] = -1
         return out
+
+    def assign(self, xyz):
+        xyz = np.float64(np.atleast_2d(xyz))
+        origin = np.float64(self.origin)
+        shape = np.int64(self.shape)
+        delta = np.float64(self.delta)
+        if xyz.shape[-1] != 3:
+            raise ValueError("Can only assign grid indices to 3D data.")
+        return assign_to_grid(xyz, origin, shape, delta)
 
     def surrounding_box(self, center, radius):
         """Find voxels that form a box around 'center', that contains all
@@ -752,6 +762,35 @@ def combine_grids(grids):
         ), "Offset of origin values must be a multiple of the grid spacing."
     shape = ((xyzmax - xyzmin) / delta + 1).astype(int)
     return Grid(origin=xyzmin, shape=shape, delta=delta)
+
+
+@numba.guvectorize(
+    ['f8[:], f8[:], i8[:], f8[:], i8[:]', 'f4[:], f8[:], i8[:], f8[:], i8[:]'],
+    '(three), (three), (three), (three) -> ()',
+    nopython=True
+)
+def assign_to_grid(xyz, origin, shape, delta, out):
+    assert len(xyz) == 3, "Only 3D data is supported for assign_to_grid"
+    or_x, or_y, or_z = origin
+    sh_x, sh_y, sh_z = shape
+    d_x, d_y, d_z = delta
+    x, y, z = xyz
+    grid_x = (x - or_x) / d_x + 0.5
+    ix = int(math.floor(grid_x))
+    if ix < 0 or ix >= sh_x:
+        out[0] = -1
+        return
+    grid_y = (y - or_y) / d_y + 0.5
+    iy = int(math.floor(grid_y))
+    if iy < 0 or iy >= sh_y:
+        out[0] = -1
+        return
+    grid_z = (z - or_z) / d_z + 0.5
+    iz = int(math.floor(grid_z))
+    if iz < 0 or iz >= sh_z:
+        out[0] = -1
+        return
+    out[0] = iz + shape[2] * (iy + shape[1] * ix)
 
 
 @numba.vectorize(nopython=True, cache=True)

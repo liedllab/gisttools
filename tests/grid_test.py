@@ -73,10 +73,27 @@ def test_surrounding_sphere_np_and_numba_equal():
 
 def test_assign():
     gd = grid.Grid(0, 4, 1)
-    assert gd.assign([0, 1, 0]) == 4
-    assert gd.assign([1, 0, 0]) == 16
-    assert gd.assign([1, 3.6, 0]) == -1
-    assert gd.assign([-0.6, 0, 0]) == -1
+    assert gd._assign([0, 1, 0])[0] == 4
+    assert gd._assign([1, 0, 0])[0] == 16
+    assert gd._assign([1, 3.6, 0])[0] == -1
+    assert gd._assign([-0.6, 0, 0])[0] == -1
+
+def test_numba_assign():
+    gd = grid.Grid(0, 4, 1)
+    assert gd.assign([0, 1, 0])[0] == 4
+    assert gd.assign([1, 0, 0])[0] == 16
+    assert gd.assign([0.49, 0, 0])[0] == 0
+    assert gd.assign([0.51, 0, 0])[0] == 16
+    assert gd.assign([1, 3.6, 0])[0] == -1
+    assert gd.assign([-0.6, 0, 0])[0] == -1
+    gd2 = grid.Grid(0, [2, 3, 4], 1)
+    assert np.all(gd2.shape == [2, 3, 4])
+    assert gd2.assign([1, 2, 3])[0] == 23
+    assert gd2.assign([2, 2, 3]) == -1
+    assert gd2.assign([1, 3, 3]) == -1
+    assert gd2.assign([1, 2, 4]) == -1
+    assert gd2.assign([1, 0, 0])[0] == 12
+    assert gd2.assign([0, 1, 0])[0] == 4
 
 def test_ensure_int():
     a = np.array([5.0, 4.0, -2.0])
@@ -87,6 +104,7 @@ def test_ensure_int():
     b = np.array([5.0, 4.1, -2.0])
     with pytest.raises(ValueError, match="Non-int value"):
         grid.ensure_int(b)
+
 
 def test_numba_int_div_returns_float():
     @numba.njit()
