@@ -20,7 +20,7 @@ def open_maybe_gzipped(filename, mode='rt'):
     return opener(filename, mode)
 
 
-def preview_dataset(struct, dataset, crange='scale', view=None, cmap="YlGnBu"):
+def preview_dataset(struct, dataset, crange='scale', view=None, cmap="YlGnBu", reverse=True):
     """Create a colored surface in a nglview widget.  This function writes a
     temporary .pdb file (GISTFILE_TEMP.pdb) in the current folder, with the
     dataset in the bfactor.  It has less control of the coloring than
@@ -39,6 +39,8 @@ def preview_dataset(struct, dataset, crange='scale', view=None, cmap="YlGnBu"):
         limits for PDB B-Factors (-9.99 to 99.99)
     cmap : str
         Colormap name. Will be passed to nglview.
+    reverse : bool
+        Whether to reverse the colormap.
 
     Returns
     -------
@@ -64,7 +66,7 @@ def preview_dataset(struct, dataset, crange='scale', view=None, cmap="YlGnBu"):
         'params': {
             'colorScheme': 'bfactor',
             'colorScale': cmap,
-            'colorReverse': True,
+            'colorReverse': reverse,
             'colorDomain': crange,
         }
     }])
