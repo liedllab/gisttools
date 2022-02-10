@@ -54,6 +54,15 @@ def gist_colnames(fmt, fh=None):
             'Eww_unref_norm', 'Dipole_x_dens', 'Dipole_y_dens', 'Dipole_z_dens',
             'Dipole_dens', 'neighbor_dens', 'neighbor_norm', 'order_norm',
         ]
+    elif fmt == 'pme':
+        cols = [
+            'voxel', 'x', 'y', 'z', 'population', 'g_O', 'g_H',
+            'dTStrans_dens', 'dTStrans_norm', 'dTSorient_dens', 'dTSorient_norm',
+            'dTSsix_dens', 'dTSsix_norm', 'Esw_dens', 'Esw_norm', '_Eww_unref_dens',
+            '_Eww_unref_norm', 'PME_dens', 'PME_norm', 'Dipole_x_dens', 'Dipole_y_dens',
+            'Dipole_z_dens', 'Dipole_dens', 'neighbor_dens', 'neighbor_norm',
+            'order_norm',
+        ]
     elif fmt == 'gigist':
         assert fh is not None, 'A file handle is needed to detect gigist column names.'
         fh.readline()
@@ -108,6 +117,10 @@ def detect_gist_format(fh):
 
     ):
         fmt = 'amber16'
+    elif second_line.startswith(
+        'voxel xcoord ycoord zcoord population g_O g_H dTStrans-dens(kcal/mol/A^3) dTStrans-norm(kcal/mol) dTSorient-dens(kcal/mol/A^3) dTSorient-norm(kcal/mol) dTSsix-dens(kcal/mol/A^3) dTSsix-norm(kcal/mol) Esw-dens(kcal/mol/A^3) Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) Eww-norm-unref(kcal/mol) PME-dens(kcal/mol/A^3) PME-norm(kcal/mol) Dipole_x-dens(D/A^3) Dipole_y-dens(D/A^3) Dipole_z-dens(D/A^3) Dipole-dens(D/A^3) neighbor-dens(1/A^3) neighbor-norm order-norm'
+    ):
+        fmt = 'pme'
     elif second_line.split()[:7] == [
         "voxel",
         "x",
@@ -185,6 +198,19 @@ class Gist:
             be the column that corresponds to the population. When using water, this is
             'g_O', for chloroform it is 'g_C'.
         """
+        self._recipes = {
+            "Eww_norm": self._recipe_eww_norm,
+            "Eww_dens": self._recipe_eww_dens,
+            "Eall_norm": self._recipe_eall_norm,
+            "Eall_dens": self._recipe_eall_dens,
+            "dTSsix_norm": self._recipe_dTSsix_norm,
+            "dTSsix_dens": self._recipe_dTSsix_dens,
+            "A_norm": self._recipe_A_norm,
+            "A_dens": self._recipe_A_dens,
+            # for PME only
+            "Eww_unref_norm": self._recipe_eww_unref_norm,
+            "Eww_unref_dens": self._recipe_eww_unref_dens,
+        }
         self.loc = _GistLocator(self)
         self.data = data
         # if "Eww_dens" in data:
@@ -217,16 +243,6 @@ class Gist:
         self.struct = struct
         if struct is not None and strip_H:
             self.struct = self.struct.atom_slice(self.struct.top.select("symbol != H"))
-        self._recipes = {
-            "Eww_norm": self._recipe_eww_norm,
-            "Eww_dens": self._recipe_eww_dens,
-            "Eall_norm": self._recipe_eall_norm,
-            "Eall_dens": self._recipe_eall_dens,
-            "dTSsix_norm": self._recipe_dTSsix_norm,
-            "dTSsix_dens": self._recipe_dTSsix_dens,
-            "A_norm": self._recipe_A_norm,
-            "A_dens": self._recipe_A_dens,
-        }
         return
 
     @property
@@ -331,6 +347,9 @@ class Gist:
         # highest_pop = self.loc[highest_pop_index]
         rho0 = (self["Eww_unref_dens"] / self["Eww_unref_norm"]).sum(0) / self[refcol].sum(0)
         return rho0
+
+    def has_pme(self):
+        return 'PME_norm' in self.data.columns
 
     def detect_frames(self, refcol='g_O'):
         """Automatically detect the number of frames and the reference density
@@ -1116,6 +1135,18 @@ class Gist:
         #     fmt='%f'
         # )
         return
+
+    def _recipe_eww_unref_norm(self, index):
+        """When using PME, there is no Eww_unref_norm. Use PME_norm instead."""
+        return self.loc[index, 'PME_norm']
+
+    def _recipe_eww_unref_dens(self, index):
+        """When using PME, there is no Eww_unref_dens. Use PME_dens instead.
+
+        In contrast to other _dens recipes, this does not use norm2dens. This
+        is because eww_unref_dens is used to detect the number of frames and
+        rho0."""
+        return self.loc[index, 'PME_dens']
 
     def _recipe_eww_norm(self, index):
         """Create Eww_norm."""
