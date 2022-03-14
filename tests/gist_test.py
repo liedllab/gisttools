@@ -7,6 +7,15 @@ from numpy.testing import assert_array_equal, assert_allclose
 import pandas as pd
 import pytest
 
+CPPTRAJ_V4_OUT = """GIST Output v4 spacing=0.5000 center=0.000000,0.000000,0.000000 dims=80,80,80 
+voxel xcoord ycoord zcoord population g_O g_H dTStrans-dens(kcal/mol/A^3) \
+dTStrans-norm(kcal/mol) dTSorient-dens(kcal/mol/A^3) dTSorient-norm(kcal/mol) \
+dTSsix-dens(kcal/mol/A^3) dTSsix-norm(kcal/mol) Esw-dens(kcal/mol/A^3) \
+Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) Eww-norm-unref(kcal/mol) \
+Dipole_x-dens(D/A^3) Dipole_y-dens(D/A^3) Dipole_z-dens(D/A^3) \
+Dipole-dens(D/A^3) neighbor-dens(1/A^3) neighbor-norm order-norm
+"""
+
 def test_combine_gists():
     # with pytest.warns(RuntimeWarning):
     example1 = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
@@ -21,6 +30,14 @@ def test_combine_gists():
     print(combined.data.keys())
     assert not np.any(combined.data['Esw_dens'] == np.nan)
     return
+
+def test_gist_colnames_v4():
+    out = gist.gist_colnames('v4', StringIO(CPPTRAJ_V4_OUT))
+    assert len(out) == 24
+    assert out == ('voxel x y z population g_O g_H dTStrans_dens dTStrans_norm'
+        ' dTSorient_dens dTSorient_norm dTSsix_dens dTSsix_norm Esw_dens Esw_norm'
+        ' Eww_unref_dens Eww_unref_norm Dipole_x_dens Dipole_y_dens Dipole_z_dens'
+        ' Dipole_dens neighbor_dens neighbor_norm order_norm').split()
 
 def test_gist_colnames():
     assert len(gist.gist_colnames('amber14')) == 22

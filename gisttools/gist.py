@@ -6,6 +6,7 @@ from .utils import ProgressPrinter, distance_weight
 import scipy.interpolate
 import pandas as pd
 import gzip
+import re
 
 
 def open_maybe_gzipped(filename):
@@ -16,6 +17,28 @@ def open_maybe_gzipped(filename):
     except OSError:
         handle = open(filename)
     return handle
+
+
+def gist_colnames_v4(fh):
+    fh.seek(0)
+    l1 = next(fh).strip()
+    l2 = next(fh).strip()
+    entries = l2.split()
+    renamed = [
+        s
+        .replace('Eww-norm-unref', 'Eww_unref_norm')
+        .replace('Eww-dens', 'Eww_unref_dens')
+        .replace('-norm', '_norm')
+        .replace('-dens', '_dens')
+        .replace('coord', '')
+        for s in entries
+    ]
+    print(renamed)
+    wo_units = [
+        re.sub('\(.*\)', '', s)
+        for s in renamed
+    ]
+    return wo_units
 
 
 def gist_colnames(fmt, fh=None):
@@ -38,6 +61,8 @@ def gist_colnames(fmt, fh=None):
     fmt : str
         The GIST format ('amber14', 'amber16', or 'gigist')
     """
+    if fmt == 'v4':
+        return gist_colnames_v4(fh=fh)
     if fmt == 'amber14':
         cols = [
             'voxel', 'x', 'y', 'z', 'population', 'g_O', 'g_H',
@@ -101,7 +126,9 @@ def detect_gist_format(fh):
     fmt : str
         The GIST format ('amber14', 'amber16', or 'gigist')
     """
-    fh.readline()
+    first_line = fh.readline().strip()
+    if first_line.lower().startswith("gist output v4"):
+        return "v4"
     second_line = fh.readline().strip()
     # Might be a str if fh is a StringIO
     if not isinstance(second_line, str):
@@ -1330,6 +1357,7 @@ def load_dx(
     strip_H=False,
     eww_ref=None,
     colname=None,
+    file_format='dx',
 ):
     """Return a Gist instance by loading an OpenDX file from disk.
 
@@ -1353,6 +1381,8 @@ def load_dx(
     colname : str or None
         How the single column in the Gist object should be called. Default: the
         basename of the filename.
+    file_format : str or None
+        Will be passed to gridData.Grid constructor.
 
     Returns
     -------
@@ -1360,7 +1390,7 @@ def load_dx(
     """
     import gridData as gd
     import mdtraj as md
-    infile = gd.Grid(filename)
+    infile = gd.Grid(filename, file_format=file_format)
     grid = Grid(
         origin=infile.origin,
         shape=np.array([len(x) for x in infile.edges])-1,
