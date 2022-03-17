@@ -21,7 +21,7 @@ def open_maybe_gzipped(filename):
 
 def gist_colnames_v4(fh):
     fh.seek(0)
-    l1 = next(fh).strip()
+    next(fh)
     l2 = next(fh).strip()
     entries = l2.split()
     renamed = [
@@ -83,8 +83,8 @@ def gist_colnames(fmt, fh=None):
         cols = [
             'voxel', 'x', 'y', 'z', 'population', 'g_O', 'g_H',
             'dTStrans_dens', 'dTStrans_norm', 'dTSorient_dens', 'dTSorient_norm',
-            'dTSsix_dens', 'dTSsix_norm', 'Esw_dens', 'Esw_norm', '_Eww_unref_dens',
-            '_Eww_unref_norm', 'PME_dens', 'PME_norm', 'Dipole_x_dens', 'Dipole_y_dens',
+            'dTSsix_dens', 'dTSsix_norm', 'Esw_dens', 'Esw_norm', 'Eww_unref_dens',
+            'Eww_unref_norm', 'PME_dens', 'PME_norm', 'Dipole_x_dens', 'Dipole_y_dens',
             'Dipole_z_dens', 'Dipole_dens', 'neighbor_dens', 'neighbor_norm',
             'order_norm',
         ]
@@ -235,8 +235,8 @@ class Gist:
             "A_norm": self._recipe_A_norm,
             "A_dens": self._recipe_A_dens,
             # for PME only
-            "Eww_unref_norm": self._recipe_eww_unref_norm,
-            "Eww_unref_dens": self._recipe_eww_unref_dens,
+            # "Eww_unref_norm": self._recipe_eww_unref_norm,
+            # "Eww_unref_dens": self._recipe_eww_unref_dens,
         }
         self.loc = _GistLocator(self)
         self.data = data
@@ -1163,17 +1163,17 @@ class Gist:
         # )
         return
 
-    def _recipe_eww_unref_norm(self, index):
-        """When using PME, there is no Eww_unref_norm. Use PME_norm instead."""
-        return self.loc[index, 'PME_norm']
+    # def _recipe_eww_unref_norm(self, index):
+    #     """When using PME, there is no Eww_unref_norm. Use PME_norm instead."""
+    #     return self.loc[index, 'PME_norm']
 
-    def _recipe_eww_unref_dens(self, index):
-        """When using PME, there is no Eww_unref_dens. Use PME_dens instead.
+    # def _recipe_eww_unref_dens(self, index):
+    #     """When using PME, there is no Eww_unref_dens. Use PME_dens instead.
 
-        In contrast to other _dens recipes, this does not use norm2dens. This
-        is because eww_unref_dens is used to detect the number of frames and
-        rho0."""
-        return self.loc[index, 'PME_dens']
+    #     In contrast to other _dens recipes, this does not use norm2dens. This
+    #     is because eww_unref_dens is used to detect the number of frames and
+    #     rho0."""
+    #     return self.loc[index, 'PME_dens']
 
     def _recipe_eww_norm(self, index):
         """Create Eww_norm."""
