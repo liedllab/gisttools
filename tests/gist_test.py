@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import gisttools.gist as gist
 from io import StringIO
-from textwrap import dedent
 import numpy as np
 from numpy.testing import assert_array_equal, assert_allclose
 import pandas as pd
@@ -15,6 +14,64 @@ Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) Eww-norm-unref(kcal/mol) \
 Dipole_x-dens(D/A^3) Dipole_y-dens(D/A^3) Dipole_z-dens(D/A^3) \
 Dipole-dens(D/A^3) neighbor-dens(1/A^3) neighbor-norm order-norm
 """
+
+GIGIST_OUTPUT = """\
+GIST calculation output.
+voxel        x          y          z         population     dTSt_d(kcal/mol)  \
+dTSt_n(kcal/mol)  dTSo_d(kcal/mol)  dTSo_n(kcal/mol)  dTSs_d(kcal/mol)  \
+dTSs_n(kcal/mol)   Esw_d(kcal/mol)   Esw_n(kcal/mol)   Eww_d(kcal/mol)   \
+Eww_n(kcal/mol)    dipoleX    dipoleY    dipoleZ    dipole    neighbour_d    \
+neighbour_n    order_n    g_O    g_H
+0 -27.25 -27.25 -29.75 41 0 0 0.00224294 0.0683823 0 0 -0.00595876 -0.18167 \
+-0.316297 -9.64321 0.00445662 -0.0110353 0.00974964 0.0153849 0.1736 5.29268 0 0.99696 1.11854
+"""
+
+PME_GIST_OUTPUT = """ \
+GIST Output v3 spacing=0.5000 center=0.000000,0.000000,0.000000 dims=80,80,80 
+voxel xcoord ycoord zcoord population g_O g_H dTStrans-dens(kcal/mol/A^3) \
+dTStrans-norm(kcal/mol) dTSorient-dens(kcal/mol/A^3) dTSorient-norm(kcal/mol) \
+dTSsix-dens(kcal/mol/A^3) dTSsix-norm(kcal/mol) Esw-dens(kcal/mol/A^3) \
+Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) Eww-norm-unref(kcal/mol) \
+PME-dens(kcal/mol/A^3) PME-norm(kcal/mol) Dipole_x-dens(D/A^3) \
+Dipole_y-dens(D/A^3) Dipole_z-dens(D/A^3) Dipole-dens(D/A^3) \
+neighbor-dens(1/A^3) neighbor-norm order-norm
+0 -19.75 -19.75 -19.75 42 1.02206 1.1194 0 0 0.00677163 0.201536 0 0 -1.67165e-06 \
+-4.97515e-05 -0.323573 -9.63014 -0.323574 -9.63017 0.0044711 0.00969178 -0.0037346 \
+0.0113079 0.1816 5.40476 0 
+"""
+
+GIST16_OUTPUT = """\
+GIST Output, information printed per voxel
+voxel xcoord ycoord zcoord population g_O g_H dTStrans-dens(kcal/mol/A^3) \
+dTStrans-norm(kcal/mol) dTSorient-dens(kcal/mol/A^3) dTSorient-norm(kcal/mol) \
+dTSsix-dens(kcal/mol/A^3) dTSsix-norm (kcal/mol) Esw-dens(kcal/mol/A^3) \
+Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) Eww-norm-unref(kcal/mol) \
+Dipole_x-dens(D/A^3) Dipole_y-dens(D/A^3) Dipole_z-dens(D/A^3) \
+Dipole-dens(D/A^3) neighbor-dens(1/A^3) neighbor-norm order-norm
+0 -9.75 -9.75 -9.75 20 0.958084 1.1976 0 0 -0.0012033 -0.0376033 0 0 0 0 -0.307576 \
+-9.61176 0.00393923 -0.0042214 0.00845889 0.0102416 0.1712 5.35 0
+"""
+
+GIST14_OUTPUT = """\
+GIST Output, information printed per voxel
+voxel xcoord ycoord zcoord population g_O g_H dTStrans-dens(kcal/mol/A^3) \
+dTStrans-norm(kcal/mol) dTSorient-dens(kcal/mol/A^3) dTSorient-norm(kcal/mol) \
+Esw-dens(kcal/mol/A^3) Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) \
+Eww-norm-unref(kcal/mol) Dipole_x-dens(D/A^3) Dipole_y-dens(D/A^3) \
+Dipole_z-dens(D/A^3) Dipole-dens(D/A^3) neighbor-dens(1/A^3) neighbor-norm order-norm
+0 -14.75 -14.75 -14.75 19 0.924012 1.09422 0.00143228 0.0471146 0.00528766 0.173936 -0.00161158 \
+-0.0530126 -0.280001 -9.21056 0.00518864 -0.0214928 -0.00779186 0.023443 0.1664 5.47368 0
+"""
+
+cols_wo_pme = ('voxel x y z population g_O g_H dTStrans_dens dTStrans_norm'
+    ' dTSorient_dens dTSorient_norm dTSsix_dens dTSsix_norm Esw_dens Esw_norm'
+    ' Eww_unref_dens Eww_unref_norm Dipole_x_dens Dipole_y_dens Dipole_z_dens'
+    ' Dipole_dens neighbor_dens neighbor_norm order_norm').split()
+
+cols_w_pme = ('voxel x y z population g_O g_H dTStrans_dens dTStrans_norm'
+    ' dTSorient_dens dTSorient_norm dTSsix_dens dTSsix_norm Esw_dens Esw_norm'
+    ' Eww_unref_dens Eww_unref_norm PME_dens PME_norm Dipole_x_dens Dipole_y_dens'
+    ' Dipole_z_dens Dipole_dens neighbor_dens neighbor_norm order_norm').split()
 
 def test_combine_gists():
     # with pytest.warns(RuntimeWarning):
@@ -34,48 +91,30 @@ def test_combine_gists():
 def test_gist_colnames_v4():
     out = gist.gist_colnames('v4', StringIO(CPPTRAJ_V4_OUT))
     assert len(out) == 24
-    assert out == ('voxel x y z population g_O g_H dTStrans_dens dTStrans_norm'
-        ' dTSorient_dens dTSorient_norm dTSsix_dens dTSsix_norm Esw_dens Esw_norm'
-        ' Eww_unref_dens Eww_unref_norm Dipole_x_dens Dipole_y_dens Dipole_z_dens'
-        ' Dipole_dens neighbor_dens neighbor_norm order_norm').split()
+    assert out == cols_wo_pme
 
 def test_gist_colnames():
     assert len(gist.gist_colnames('amber14')) == 22
-    assert len(gist.gist_colnames('amber16')) == 24
-    gigist_test = dedent("""\
-        GIST calculation output.
-        voxel        x          y          z         population     dTSt_d(kcal/mol)  dTSt_n(kcal/mol)  dTSo_d(kcal/mol)  dTSo_n(kcal/mol)  dTSs_d(kcal/mol)  dTSs_n(kcal/mol)   Esw_d(kcal/mol)   Esw_n(kcal/mol)   Eww_d(kcal/mol)   Eww_n(kcal/mol)    dipoleX    dipoleY    dipoleZ    dipole    neighbour_d    neighbour_n    order_n    g_O    g_H
-        0 -27.25 -27.25 -29.75 41 0 0 0.00224294 0.0683823 0 0 -0.00595876 -0.18167 -0.316297 -9.64321 0.00445662 -0.0110353 0.00974964 0.0153849 0.1736 5.29268 0 0.99696 1.11854
-        """)
-    out = gist.gist_colnames('gigist', StringIO(gigist_test))
+    assert gist.gist_colnames('amber16') == cols_wo_pme
+    assert gist.gist_colnames('pme') == cols_w_pme
+    out = gist.gist_colnames('gigist', StringIO(GIGIST_OUTPUT))
     assert len(out) == 24
     assert out[-2:] == ['g_O', 'g_H']
 
 def test_detect_gist_format_amber14():
-    gist14_test = dedent("""\
-        GIST Output, information printed per voxel
-        voxel xcoord ycoord zcoord population g_O g_H dTStrans-dens(kcal/mol/A^3) dTStrans-norm(kcal/mol) dTSorient-dens(kcal/mol/A^3) dTSorient-norm(kcal/mol) Esw-dens(kcal/mol/A^3) Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) Eww-norm-unref(kcal/mol) Dipole_x-dens(D/A^3) Dipole_y-dens(D/A^3) Dipole_z-dens(D/A^3) Dipole-dens(D/A^3) neighbor-dens(1/A^3) neighbor-norm order-norm
-        0 -14.75 -14.75 -14.75 19 0.924012 1.09422 0.00143228 0.0471146 0.00528766 0.173936 -0.00161158 -0.0530126 -0.280001 -9.21056 0.00518864 -0.0214928 -0.00779186 0.023443 0.1664 5.47368 0
-        """)
-    assert gist.detect_gist_format(StringIO(gist14_test)) == 'amber14'
+    assert gist.detect_gist_format(StringIO(GIST14_OUTPUT)) == 'amber14'
     return
 
 def test_detect_gist_format_amber16():
-    gist16_test = dedent("""\
-        GIST Output, information printed per voxel
-        voxel xcoord ycoord zcoord population g_O g_H dTStrans-dens(kcal/mol/A^3) dTStrans-norm(kcal/mol) dTSorient-dens(kcal/mol/A^3) dTSorient-norm(kcal/mol) dTSsix-dens(kcal/mol/A^3) dTSsix-norm (kcal/mol) Esw-dens(kcal/mol/A^3) Esw-norm(kcal/mol) Eww-dens(kcal/mol/A^3) Eww-norm-unref(kcal/mol) Dipole_x-dens(D/A^3) Dipole_y-dens(D/A^3) Dipole_z-dens(D/A^3) Dipole-dens(D/A^3) neighbor-dens(1/A^3) neighbor-norm order-norm
-        0 -9.75 -9.75 -9.75 20 0.958084 1.1976 0 0 -0.0012033 -0.0376033 0 0 0 0 -0.307576 -9.61176 0.00393923 -0.0042214 0.00845889 0.0102416 0.1712 5.35 0
-        """)
-    assert gist.detect_gist_format(StringIO(gist16_test)) == 'amber16'
+    assert gist.detect_gist_format(StringIO(GIST16_OUTPUT)) == 'amber16'
     return
 
 def test_detect_gist_format_gigist():
-    gigist_test = dedent("""\
-        GIST calculation output.
-        voxel        x          y          z         population     dTSt_d(kcal/mol)  dTSt_n(kcal/mol)  dTSo_d(kcal/mol)  dTSo_n(kcal/mol)  dTSs_d(kcal/mol)  dTSs_n(kcal/mol)   Esw_d(kcal/mol)   Esw_n(kcal/mol)   Eww_d(kcal/mol)   Eww_n(kcal/mol)    dipoleX    dipoleY    dipoleZ    dipole    neighbour_d    neighbour_n    order_n    g_O    g_H
-        0 -27.25 -27.25 -29.75 41 0 0 0.00224294 0.0683823 0 0 -0.00595876 -0.18167 -0.316297 -9.64321 0.00445662 -0.0110353 0.00974964 0.0153849 0.1736 5.29268 0 0.99696 1.11854
-        """)
-    assert gist.detect_gist_format(StringIO(gigist_test)) == 'gigist'
+    assert gist.detect_gist_format(StringIO(GIGIST_OUTPUT)) == 'gigist'
+    return
+
+def test_detect_gist_format_pme():
+    assert gist.detect_gist_format(StringIO(PME_GIST_OUTPUT)) == 'pme'
     return
 
 def test_integrate_around():

@@ -35,7 +35,7 @@ def gist_colnames_v4(fh):
     ]
     print(renamed)
     wo_units = [
-        re.sub('\(.*\)', '', s)
+        re.sub(r'\(.*\)', '', s)
         for s in renamed
     ]
     return wo_units
