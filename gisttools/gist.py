@@ -33,7 +33,6 @@ def gist_colnames_v4(fh):
         .replace('coord', '')
         for s in entries
     ]
-    print(renamed)
     wo_units = [
         re.sub(r'\(.*\)', '', s)
         for s in renamed
