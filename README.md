@@ -26,3 +26,6 @@ Optional dependencies (only for some functionality):
 * gridDataFormats (for loading .dx files)
 
 You should be able to install gisttools in a local environment using `pip install .`. gisttools has been tested mainly on Pyton 3.7, but all versions >= 3.6 *should* work, so If you experience errors with any of those versions, feel free to contact me.
+
+## Recent changes
+* Commit 280f39cb6806b0333bf86aa656cda90c97a1d378 introduced support for PME-GIST. Since old cpptraj versions did not split the energy into Esw and Eww, I opted to use the PME_ columns as Eww in gisttools, to ensure that the other gisttools functions work as expected. However, newer cpptraj versions do split the energy, so I undid this change in commit 2effd38b3ff6154b617b9d1cbb402404db630618. I recommend to use a new version of both cpptraj and gisttools, and use the Esw and Eww columns for GIST post-processing.
