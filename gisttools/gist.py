@@ -416,7 +416,7 @@ class Gist:
         # highest_pop = self.loc[highest_pop_index]
         rho0 = self.rho0
         if pd.isna(rho0):
-            rho0 = self.detect_rho()
+            rho0 = self.detect_rho(refcol=refcol)
         if pd.isna(rho0):
             raise ValueError('Cannot detect number of frames because rho0 is NaN and cannot be detected.')
         n_frames = np.int_(
@@ -854,7 +854,7 @@ class Gist:
         normalized_data = {}
         for col in columns:
             if col == 'voxels':
-                values == np.ones_like(ind)
+                values = np.ones_like(ind)
             else:
                 values = self.loc[ind, col + col_suffix].values
             if cutoff_E != 0:
@@ -877,6 +877,7 @@ class Gist:
         bins=20,
         atomic_radii=None,
         col_suffix='_dens',
+        normalize='dens',
     ):
         """Create a radial distribution function (rdf) of GIST quantities around
         centers.
@@ -904,6 +905,8 @@ class Gist:
         col_suffix : str, default '_dens'
             Will be added to all column labels. The default is _dens because this
             function is only correct with density-weighted columns.
+        normalize : str or list of str
+            How to normalize the rdfs ("none", "dens", or "norm"). Default: "dens"
 
         Returns
         -------
@@ -920,6 +923,8 @@ class Gist:
         bins = np.asarray(bins)
         if len(bins.shape) == 0:
             bins = np.linspace(0, rmax, bins, endpoint=False)
+        if isinstance(normalize, str):
+            normalize = [normalize] * len(columns)
 
         ind, closest_atom, dist = self.distance_to_spheres(centers, rmax=rmax, atomic_radii=atomic_radii)
 
@@ -932,14 +937,15 @@ class Gist:
         )
 
         rdfs = []
-        for col in columns:
+        for col, norm_by in zip(columns, normalize):
             if col == 'voxels':
                 coldata = np.ones_like(ind)
             else:
-                coldata = self.loc[ind, col + col_suffix].values * self.grid.voxel_volume
+                coldata = self.loc[ind, col + col_suffix].values
+            normalized = self._normalize_values(coldata, ind, norm_by)
             integrals = np.bincount(
                 distance_and_atom_bin,
-                weights=coldata,
+                weights=normalized,
                 minlength=np.prod(df_shape)
             )
             # The reason I set it up so that I have to transpose is that this
@@ -953,6 +959,22 @@ class Gist:
             rdfs.append(pd.DataFrame(integrals_per_atom))
         return bins, rdfs
 
+    def _normalize_values(self, values, voxels, by):
+        """Return normalized values, depending on "by".
+
+        If by equals
+            * "none": do nothing
+            * "dens": multiple with the voxel volume
+            * "norm": divide by the average number of molecules in each voxel
+        """
+        if by == "none":
+            return values
+        elif by == "dens":
+            return values * self.grid.voxel_volume
+        elif by == "norm":
+            n_solvent = self.loc[voxels, "population"] / self.n_frames
+            return values / n_solvent
+
     def rdf(
         self,
         column,
@@ -961,6 +983,7 @@ class Gist:
         bins=20,
         atomic_radii=None,
         col_suffix='_dens',
+        normalize='dens'
     ):
         """Create a radial distribution function (rdf) of a single GIST
         quantities around centers.
@@ -988,6 +1011,8 @@ class Gist:
         col_suffix : str, default '_dens'
             Will be added to all column labels. The default is _dens because this
             function is only correct with density-weighted columns.
+        normalize : str or list of str
+            How to normalize the rdfs ("none", "dens", or "norm"). Default: "dens"
 
         Returns
         -------
@@ -1003,6 +1028,7 @@ class Gist:
             bins=bins,
             atomic_radii=atomic_radii,
             col_suffix=col_suffix,
+            normalize=normalize,
         )
         return bins, rdf.sum(0).rename(column)
 
@@ -1014,6 +1040,7 @@ class Gist:
         bins=20,
         atomic_radii=None,
         col_suffix='_dens',
+        normalize='dens',
     ):
         """Create a radial distribution function (rdf) of a single GIST
         quantities around centers.
@@ -1057,6 +1084,7 @@ class Gist:
             bins=bins,
             atomic_radii=atomic_radii,
             col_suffix=col_suffix,
+            normalize=normalize,
         )
         return bins, rdf
 
@@ -1068,6 +1096,7 @@ class Gist:
         bins=20,
         atomic_radii=None,
         col_suffix='_dens',
+        normalize='dens',
     ):
         """Create a radial distribution function (rdf) of a single GIST
         quantities around centers.
@@ -1113,6 +1142,7 @@ class Gist:
             bins=bins,
             atomic_radii=atomic_radii,
             col_suffix=col_suffix,
+            normalize=normalize,
         )
         return bins, [rdf.sum(0).rename(col) for rdf, col in zip(rdfs, columns)]
 
@@ -1152,14 +1182,6 @@ class Gist:
         assert isinstance(column, str), 'save_dx requires a single column name as input.'
         data = self[column].values
         self.grid.save_dx(data, filename, column)
-        # np.savetxt(
-        #     filename,
-        #     data,
-        #     header=self.grid.dxheader(),
-        #     footer=self.grid.dxfooter(column),
-        #     comments='',
-        #     fmt='%f'
-        # )
         return
 
     # def _recipe_eww_unref_norm(self, index):
