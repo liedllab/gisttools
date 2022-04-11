@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import gisttools.gist as gist
+import gisttools.grid as grid
 from io import StringIO
 import numpy as np
 from numpy.testing import assert_array_equal, assert_allclose
@@ -73,16 +74,36 @@ cols_w_pme = ('voxel x y z population g_O g_H dTStrans_dens dTStrans_norm'
     ' Eww_unref_dens Eww_unref_norm PME_dens PME_norm Dipole_x_dens Dipole_y_dens'
     ' Dipole_z_dens Dipole_dens neighbor_dens neighbor_norm order_norm').split()
 
-def test_combine_gists():
-    # with pytest.warns(RuntimeWarning):
-    example1 = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
-    example2 = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
-    example2.grid.origin[2] += 1.
-    combined = gist.combine_gists([example1, example2])
+@pytest.fixture
+def small_outfile():
+    return gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
+
+@pytest.fixture
+def small_outfile_with_shifted_origin():
+    gf = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
+    gf.grid.origin[2] += 1.
+    return gf
+
+@pytest.fixture
+def dummy_gist():
+    gd = grid.Grid.centered(0, 10, 0.5)
+    np.random.seed(0)
+    pop = np.random.randint(0, 20, 1000)
+    values = np.random.random(1000)
+    values[pop == 0] = 0.
+    data = pd.DataFrame({'population': pop, 'val_dens': values/gd.voxel_volume})
+    class dummy_traj:
+        xyz = np.array([[0, 0, 0]]) / 10
+    gf = gist.Gist(data, grid=gd, n_frames=1, struct=dummy_traj)
+    gf['val_norm'] = gf.dens2norm(gf['val_dens'])
+    return gf
+
+def test_combine_gists(small_outfile, small_outfile_with_shifted_origin):
+    combined = gist.combine_gists([small_outfile, small_outfile_with_shifted_origin])
     expected_shape = np.array([2, 3, 4])
     expected_z_column = np.array([-0.25, 0.25, 0.75, 1.25]*6)
     assert_array_equal(combined.grid.shape, expected_shape)
-    assert_allclose(combined.grid.xyz(np.arange(combined.grid.n_voxels))[:, 2], expected_z_column)
+    assert_allclose(combined.grid.xyz(np.arange(combined.grid.size))[:, 2], expected_z_column)
     print(combined.data)
     print(combined.data.keys())
     assert not np.any(combined.data['Esw_dens'] == np.nan)
@@ -125,12 +146,31 @@ def test_integrate_around():
     with pytest.warns(RuntimeWarning):
         example = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=2500)
     integrals = example.integrate_around(
-        ["A", "Esw"],
+        ["A_dens", "Esw_dens"],
         centers=[[-0.5, -0.5, -0.25]],
         rmax=0.51,
     )
     expected = pd.DataFrame.from_dict({"A_dens": [-0.971784722/4], "Esw_dens": [0.008096718/4]})
     assert np.allclose(integrals.values, expected.values)
+
+def test_dens2norm(dummy_gist):
+    assert np.allclose(
+        dummy_gist.dens2norm(dummy_gist['val_dens']),
+        dummy_gist['val_norm']
+    )
+    index_lst = [0, 10, 40]
+    index_arr = np.array(index_lst)
+    index_series = pd.Series(np.full(dummy_gist.grid.size, False, dtype=bool))
+    index_series.loc[index_arr] = True
+    for index in [index_lst, index_arr, index_series]:
+        print(index)
+        assert np.allclose(
+            dummy_gist.dens2norm(dummy_gist.loc[index, 'val_dens'], index=index),
+            dummy_gist.loc[index, 'val_norm']
+        )
+    with pytest.warns(UserWarning):
+        dummy_gist.loc[0, 'population'] = 0
+        dummy_gist.dens2norm(dummy_gist['val_dens'])
 
 def test_distance_to_spheres():
     gf = gist.load_gist_file('tests/example_gist_5000frames.dat', eww_ref=-9.533)
@@ -148,7 +188,8 @@ def test_distance_to_spheres():
         np.sqrt(np.sum(np.array([1., 0., 0.25])**2))
     )
 
-def construct_3x3x100_coords():
+@pytest.fixture
+def coords_3x3x100():
     xyz = np.stack((
         np.repeat([-1, 0, 1], 300),
         np.tile(np.repeat([-1, 0, 1], 100), 3),
@@ -156,25 +197,22 @@ def construct_3x3x100_coords():
     )).T
     return xyz
 
-def test_construct_3x3x3_coords():
-    xyz = construct_3x3x100_coords()
-    np.testing.assert_array_equal(xyz[:2], [[-1, -1, 0], [-1, -1, 1]])
-    np.testing.assert_array_equal(xyz[-2:], [[1, 1, 98], [1, 1, 99]])
+def test_3x3x100_coords(coords_3x3x100):
+    np.testing.assert_array_equal(coords_3x3x100[:2], [[-1, -1, 0], [-1, -1, 1]])
+    np.testing.assert_array_equal(coords_3x3x100[-2:], [[1, 1, 98], [1, 1, 99]])
 
-def test_gist_from_dataframe():
-    xyz = construct_3x3x100_coords()
+def test_gist_from_dataframe(coords_3x3x100):
     gf = gist.Gist(pd.DataFrame({
-        'x': xyz[:, 0],
-        'y': xyz[:, 1],
-        'z': xyz[:, 2],
-        'TESTCOL': np.random.random(len(xyz)),
+        'x': coords_3x3x100[:, 0],
+        'y': coords_3x3x100[:, 1],
+        'z': coords_3x3x100[:, 2],
+        'TESTCOL': np.random.random(len(coords_3x3x100)),
     }))
     np.testing.assert_allclose(gf.grid.origin, [-1, -1, 0])
     np.testing.assert_allclose(gf.grid.shape, [3, 3, 100])
     np.testing.assert_allclose(gf.grid.delta, [1, 1, 1])
 
-def test_projection_nearest_no_weight():
-    xyz = construct_3x3x100_coords()
+def test_projection_nearest_no_weight(coords_3x3x100):
     class mock_traj:
         """Used as dummy object"""
     mock_traj.xyz = np.array([[
@@ -189,15 +227,64 @@ def test_projection_nearest_no_weight():
         [ 1,  1, 0],
     ]]) * 0.1  # mdtraj calculates in nm.
     gf = gist.Gist(pd.DataFrame({
-        'x': xyz[:, 0],
-        'y': xyz[:, 1],
-        'z': xyz[:, 2],
-        'TEST_dens': np.ones(len(xyz)),
-        'population': np.ones(len(xyz)),
+        'x': coords_3x3x100[:, 0],
+        'y': coords_3x3x100[:, 1],
+        'z': coords_3x3x100[:, 2],
+        'TEST_dens': np.ones(len(coords_3x3x100)),
+        'population': np.ones(len(coords_3x3x100)),
     }), struct=mock_traj, rho0=1., n_frames=1)
     for dist in range(4):
-        proj = gf.projection_nearest(['TEST', 'voxels'], rmax=dist)
-        np.testing.assert_allclose(proj.TEST.values, dist + 1)
+        proj = gf.projection_nearest(['TEST_dens', 'voxels'], rmax=dist)
+        np.testing.assert_allclose(proj.TEST_dens.values, dist + 1)
+
+def test_rdf(dummy_gist):
+    gf = dummy_gist
+    pop = gf['population']
+    # rmax = 10 => contains the whole grid
+    bins, rdf_none = gf.rdf('population', rmax=10, bins=1, normalize='none')
+    bins, rdf_dens = gf.rdf('population', rmax=10, bins=1, normalize='dens')
+    bins, rdf_norm = gf.rdf('population', rmax=10, bins=10, normalize='norm')
+    assert rdf_norm.shape == (10,)
+    assert np.isclose(rdf_none[0], pop.sum())
+    print(np.sum(gf['population']))
+    assert np.isclose(rdf_dens[0], np.sum(gf['population']) / (gf.grid.size * gf.grid.voxel_volume))
+    assert (~np.isnan(rdf_norm)).sum() > 3
+    np.testing.assert_allclose(rdf_norm[~np.isnan(rdf_norm)], 1)
+
+    not_origin = [1, 0, 0]
+    integral = gf.integrate_around('val_dens', rmax=2, centers=not_origin)
+    assert np.isclose(gf.rdf('val_dens', rmax=2, bins=1, centers=not_origin, normalize='none')[1][0], integral)
+
+def test_detect_reference_value(dummy_gist):
+    expected_refval = 5.
+    n_solvents = dummy_gist['population'] / dummy_gist.n_frames
+    normed = np.full(dummy_gist.grid.size, expected_refval)
+    ind, _, _ = dummy_gist.distance_to_spheres(rmax=1)
+    normed[ind] = 2*5.
+    dens = normed * n_solvents / dummy_gist.grid.voxel_volume
+    dummy_gist['to_ref_norm'] = normed
+    dummy_gist['to_ref_dens'] = dens
+    refval = dummy_gist.detect_reference_value('to_ref_norm', dlim=(2, 3.5))
+    assert isinstance(refval, float)
+    assert refval == pytest.approx(expected_refval)
+
+def test_get_total(dummy_gist):
+    vvox = dummy_gist.grid.voxel_volume
+    for voxels in [None, [0, 1, 32, 345]]:
+        indices = voxels or slice(None)
+        expected = dummy_gist.loc[indices, 'val_dens'] * vvox
+        for type in ['dens', 'norm']:
+            tot = dummy_gist.get_total(f'val_{type}', index=voxels)
+            np.testing.assert_allclose(tot, expected)
+        expected_voxels = dummy_gist.grid.size if voxels is None else len(voxels)
+        n_vox = dummy_gist.get_total('voxels', index=indices)
+        assert n_vox.sum() == expected_voxels
+
+def test_guess_column_type():
+    assert gist.as_gist_quantity('something_dens').normalization == gist.VoxelNormalization.dens
+    assert gist.as_gist_quantity('something_norm').normalization == gist.VoxelNormalization.norm
+    with pytest.raises(ValueError):
+        gist.as_gist_quantity('something')
 
 print("Running doctests ...")
 import doctest
