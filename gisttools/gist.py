@@ -905,7 +905,7 @@ class Gist:
                         distance_and_atom_bin, weights=n_solvent, minlength=np.prod(df_shape)
                     ).reshape(df_shape).T
             else:
-                raise ValueError("Unknown argument to normalize: ", normalize)
+                raise ValueError("Unknown argument to normalize: ", norm_by)
             coldata = self.get_total(col, index=ind)
             integrals = np.bincount(
                 distance_and_atom_bin,
