@@ -5,6 +5,7 @@ from .grid import Grid, combine_grids, grid_from_xyz
 from .utils import ProgressPrinter, distance_weight
 import scipy.interpolate
 import pandas as pd
+from collections import OrderedDict
 import gzip
 import re
 
@@ -12,8 +13,8 @@ import re
 def open_maybe_gzipped(filename):
     """Try to open a file using the gzip library. If this fails, open directly."""
     try:
-        handle = gzip.open(filename)
-        handle.peek(1)
+        handle = gzip.open(filename, "rt")
+        handle.read(1)
     except OSError:
         handle = open(filename)
     return handle
@@ -33,7 +34,6 @@ def gist_colnames_v4(fh):
         .replace('coord', '')
         for s in entries
     ]
-    print(renamed)
     wo_units = [
         re.sub(r'\(.*\)', '', s)
         for s in renamed
@@ -234,6 +234,7 @@ class Gist:
             "dTSsix_dens": self._recipe_dTSsix_dens,
             "A_norm": self._recipe_A_norm,
             "A_dens": self._recipe_A_dens,
+            "voxels": self._recipe_voxels,
             # for PME only
             # "Eww_unref_norm": self._recipe_eww_unref_norm,
             # "Eww_unref_dens": self._recipe_eww_unref_dens,
@@ -253,7 +254,7 @@ class Gist:
         self.rho0 = rho0
         if n_frames is None:
             try:
-                n_frames = self.detect_frames(refcol=autodetect_refcol)
+                n_frames = self.detect_frames()
             except KeyError:
                 n_frames = None
         self.n_frames = n_frames
@@ -334,7 +335,7 @@ class Gist:
         warnings.warn('Gist.from_dataframe has been deprecated. Just use Gist(df)')
         return Gist(*args, **kwargs)
 
-    def detect_rho(self, refcol='g_O'):
+    def detect_rho(self, refcol='g_O', density_from='Eww_unref'):
         """Automatically detect the number of frames and the reference density
         from data points.
 
@@ -366,19 +367,16 @@ class Gist:
         '0.0329'
 
         """
-        # I used to use self['population'] here. This is unsafe when using GIST
-        # with ions, since there can be a voxel with no water but a lot of ions.
-        # The calculated rho0 with ions is WRONG. But this way at least n_frames
-        # works...
-        # highest_pop_index = self[refcol].idxmax()
-        # highest_pop = self.loc[highest_pop_index]
-        rho0 = (self["Eww_unref_dens"] / self["Eww_unref_norm"]).sum(0) / self[refcol].sum(0)
+        if isinstance(density_from, str):
+            density_from = (density_from + '_dens', density_from + '_norm')
+        density = self[density_from[0]] / self[density_from[1]]
+        rho0 = density.sum(0) / self[refcol].sum(0)
         return rho0
 
     def has_pme(self):
         return 'PME_norm' in self.data.columns
 
-    def detect_frames(self, refcol='g_O'):
+    def detect_frames(self, density_from='Eww_unref'):
         """Automatically detect the number of frames and the reference density
         from data points.
 
@@ -410,18 +408,12 @@ class Gist:
         '5000'
 
         """
+        if isinstance(density_from, str):
+            density_from = (density_from + '_dens', density_from + '_norm')
         voxel_volume = self.grid.voxel_volume
-        # I used to use self['population'] here. This is unsafe when using GIST
-        # with ions, since there can be a voxel with no water but a lot of ions.
-        # highest_pop_index = self[refcol].idxmax()
-        # highest_pop = self.loc[highest_pop_index]
-        rho0 = self.rho0
-        if pd.isna(rho0):
-            rho0 = self.detect_rho()
-        if pd.isna(rho0):
-            raise ValueError('Cannot detect number of frames because rho0 is NaN and cannot be detected.')
+        density = self[density_from[0]] / self[density_from[1]]
         n_frames = np.int_(
-            np.round(self["population"].sum() / rho0 / voxel_volume / self[refcol].sum())
+            np.round(self["population"].sum() / density.sum() / voxel_volume)
         )
         return n_frames
 
@@ -476,7 +468,7 @@ class Gist:
 
     def detect_reference_value(
         self,
-        columns='Eww_unref',
+        columns='Eww_unref_dens',
         col_suffix='_dens',
         centers='struct',
         dlim=(12, 16),
@@ -507,15 +499,9 @@ class Gist:
         dlim : tuple of 2 positive floats, where dlim[0] < dlim[1]
             Upper and lower limit of the rdf-slice that is used to detect the reference
             value.
-        n_bins : int
-            Number of bins for the rdf. This value does not affect the
-            calculation, but it does affect the density maximum, which is taken
-            as reference for min_relative_population. Must be even because the
-            sanity checks split the distance range in 2 equal groups.
         min_relative_population : float
-            Assert that the ratio between the mean bin population in the first half of
-            the range and the population maximum in the histogram, as well as the same
-            ratio for the second half, is below min_relative_population.
+            Assert that both the first and the second half of the histogram have at least
+            this share of the total population.
         max_spread : float
             Asserts that the difference in the reference value obtained from the first
             and second half of the range is below max_spread. Raises RuntimeError
@@ -539,58 +525,46 @@ class Gist:
         reference values are the values.
         """
         assert dlim[1] >= dlim[0], f'dlim[1] must be >= dlim[0], but dlim is {dlim}'
-        if isinstance(columns, str):
+        single_value_requested = isinstance(columns, str)
+        if single_value_requested:
             columns = [columns]
-        columns_with_suffix = [c + col_suffix for c in columns]
         # There must be an even number of bins, so that we can split the range
         # in half for the sanity checks.
-        assert (n_bins % 2) == 0, "n_bins must be even."
-        bin_edges = np.linspace(dlim[0], dlim[1], n_bins, endpoint=False)
         _, (pop_hist, *histograms) = self.multiple_rdfs(
-            ['population'] + columns_with_suffix,
+            ['population'] + columns,
             rmax=dlim[1],
-            bins=bin_edges,
-            col_suffix='',
+            bins=np.linspace(dlim[0], dlim[1], 2, endpoint=False),
+            normalize=['none'] + ['norm']*len(columns),
         )
-        max_pop = np.max(pop_hist)
-        first_half = np.zeros(n_bins, dtype=bool)
-        first_half[:n_bins//2] = True
-        second_half = ~first_half
-        # Should never be false since we already checked that there is an even
-        # number of bins.
-        assert np.sum(first_half) == np.sum(second_half), \
-            "Uneven split in sanity check in detect_reference_value. This should never happen!"
+        pop = np.sum(pop_hist)
         # Sanity check Nr. 1:
         # Check that there is a significant amount of population (water count)
         # both in the first and in the second half of the distance range
-        if np.average(pop_hist[first_half]) / max_pop < min_relative_population:
+        if pop_hist[0] / pop < min_relative_population:
             raise RuntimeError(
                 'Not enough population in the first half of dlim, '
-                f'{np.average(pop_hist[first_half])} / {max_pop} < {min_relative_population}'
+                f'{pop_hist[0]} / {pop} < {min_relative_population}'
             )
-        if np.average(pop_hist[second_half]) / max_pop < min_relative_population:
+        if pop_hist[1] / pop < min_relative_population:
             raise RuntimeError(
                 'Not enough population in the second half of dlim, '
-                f'{np.average(pop_hist[second_half])} / {max_pop} < {min_relative_population}'
+                f'{pop_hist[1]} / {pop} < {min_relative_population}'
             )
 
-        ref_values = pd.Series()
+        ref_values = []
         for col, hist in zip(columns, histograms):
             # Normalize hist by the population, so that it converges towards the per_molecule reference value.
-            hist /= (pop_hist / (self.n_frames * self.grid.voxel_volume))
-            ref_values[col] = np.average(hist, weights=pop_hist)
+            ref_values.append(np.average(hist, weights=pop_hist))
             # Sanity check Nr. 2:
             # Check that the average reference value in the first and second half
             # of the distance range is about equal (within max_spread)
-            if abs(
-                np.average(hist[first_half], weights=pop_hist[first_half])
-                - np.average(hist[second_half], weights=pop_hist[second_half])
-            ) > max_spread:
+            if abs(hist[0] - hist[1]) > max_spread:
                 raise RuntimeError(
                     'Too much difference between first and second half of dlim: '
-                    f'{np.average(hist[first_half], weights=pop_hist[first_half])}'
-                    f' != {np.average(hist[second_half], weights=pop_hist[second_half])}'
+                    f'{hist[0]} != {hist[1]}'
                 )
+        if single_value_requested:
+            return ref_values[0]
         return ref_values
 
     def reference_mixture(
@@ -635,35 +609,53 @@ class Gist:
         ## OLS
         refvals = np.linalg.inv(ref_dens.T @ ref_dens) @ ref_dens.T @ ref_ener
         refvals = refvals.reshape(1, len(non_water_density_cols) + 1)
+        print(refvals)
         ref_energy = (densities * refvals).sum(1)
         return ref_energy
+
+    def get_total(self, column, index=None):
+        """The contribution of each voxel to the total, or integral.
         
+        For _dens columns, this is the value * voxel_volume.
+        For _norm columns, this is the value * population / n_frames.
+        """
+        column = as_gist_quantity(column)
+        return column.get_total(self, indices=index)
+
+    def get_as_norm(self, column, index=None):
+        total = self.get_total(column, index=index)
+        return total / VoxelNormalization.norm(self)
+
+    def get_as_dens(self, column, index=None):
+        total = self.get_total(column, index=index)
+        return total / VoxelNormalization.dens(self)
+
+    def get_total_referenced(self, column, ref, index=None):
+        """Get total voxel contribution minus a PER-MOLECULE reference."""
+        norm = VoxelNormalization.norm(self, indices=index)
+        return self.get_total(column) - ref * norm
+
+    def get_referenced(self, column, ref, index=None):
+        """Subtract a per-molecule reference from the specified column."""
+        total = self.get_total_referenced(column, ref, index=index)
+        norm = as_gist_quantity(column).normalization(self, indices=index)
+        return total / norm
 
     def integrate_around(
         self,
         columns,
         rmax=5.,
         centers='struct',
-        extra_weights=1,
-        col_suffix='_dens',
         weighting_method=None,
         weighting_options=None,
     ):
         """Integrate the given columns around the given centers. If no centers are
         given, defaults to self.coord.
 
-        Notes
-        -----
-        This function only works with density-weighted columns, therefore _dens is
-        added to all columns by default. You can generate density-weighted columns from
-        normed columns using the dens2norm method. You can also override this behavior
-        by setting col_suffix=''.
-
         Parameters
         ----------
-        columns : list of str
-            column indices to project.  For each col, col + '_dens' must be valid
-            column index.
+        columns : list of (str or GistQuantity)
+            column indices to integrate.
         rmax : float
             Radius of the sphere from which voxels are to be projected onto the atoms,
             in angstrom.
@@ -686,21 +678,13 @@ class Gist:
         """
         if isinstance(columns, str):
             columns = [columns]
-        columns = [c + col_suffix for c in columns]
-        rename = lambda text : text[:-len(col_suffix)]
         ind, _, dist = self.distance_to_spheres(centers, rmax)
-        weights = extra_weights * self.grid.voxel_volume
-        if weighting_options is None:
-            weighting_options = {}
-        weights = (
-            extra_weights \
-            * self.grid.voxel_volume \
-            * distance_weight(dist, weighting_method, **weighting_options)
-        )
+        weighting_options = weighting_options or {}
+        weights = distance_weight(dist, weighting_method, **weighting_options)
         out = pd.Series(dtype=float)
         for col in columns:
-            out[col] = np.sum((self.loc[ind, col]*weights).values)
-        return out.rename(rename)
+            out[col] = np.sum((self.get_total(col, index=ind)*weights).values)
+        return out
 
     def projection_mean(
         self,
@@ -709,32 +693,22 @@ class Gist:
         centers='struct',
         residues=None,
         atomic_radii=None,
-        col_suffix='_dens',
         weighting_method=None,
         weighting_options=None,
     ):
-        """Project GIST data to the nearest atoms using the algorithm from Michi's
-        python scripts.
-
-        Notes
-        -----
-        This function only works with density-weighted columns, therefore _dens is
-        added to all columns by default. You can generate density-weighted columns from
-        normed columns using the dens2norm method. You can also override this behavior
-        by setting col_suffix=''.
+        """Project GIST data to atoms via an average within a sphere around each atom.
 
         Parameters
         ----------
-        columns : list of str
-            column indices to project.  For each col, col + '_dens' must be valid
-            column index.
+        columns : list of (str or GistQuantity)
+            column indices to project.
         rmax : float
             Radius of the sphere from which voxels are to be projected onto the atoms,
             in angstrom.
-        centers : np.ndarray, shape=(n, 3)
+        centers : np.ndarray, shape=(n_atoms, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
-        residues : iterable, len(residues) = n
+        residues : iterable of length n_atoms
             Residue numbers of all atoms.  Atoms with the same number will be treated
             as a residue.  If residues is None, treat all atoms separately.
         atomic_radii : np.ndarray or None or 'struct'.
@@ -743,9 +717,6 @@ class Gist:
             closest atomic center. If 'struct', uses the radii of self.struct. If None,
             calculate the distance to the centers instead of to the atomic surface.
             (Default None)
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            functions is only correct with density-weighted columns.
         weighting_method : str or None
             Used to weight voxels by their distance to the nearest atom. Can be
             'piecewise_linear', 'gaussian', 'logistic', None, or a callable. 
@@ -770,25 +741,18 @@ class Gist:
         if weighting_options is None:
             weighting_options = {}
 
-        unique_res = np.unique(residues)
+        unique_res = OrderedDict()
+        for i, r in enumerate(residues):
+            unique_res.setdefault(r, []).append(i)
         out = pd.DataFrame(index=unique_res, columns=columns)
-        pop = self['population'].values
-        temp_data = {c: self[c + col_suffix].values for c in columns}
+        temp_data = {c: self.get_total(c).values for c in columns}
 
         with ProgressPrinter('{:.0f} % of atoms processed.', len(unique_res)) as progress:
-            for resnum in unique_res:
-                # nonzero returns a list of arrays.
-                res_ind = np.nonzero(residues == resnum)[0]
-                res_coords = centers[res_ind]
-
-                ind, _, dist = self.distance_to_spheres(res_coords, rmax=rmax, atomic_radii=atomic_radii)
+            for resnum, res_ind in unique_res.items():
+                ind, _, dist = self.distance_to_spheres(centers[res_ind], rmax=rmax, atomic_radii=atomic_radii)
                 weights = distance_weight(dist, weighting_method, **weighting_options)
-                normalization = np.sum(weights * pop[ind]) / (self.n_frames * self.grid.voxel_volume)
-
                 for col in columns:
-                    out.loc[res_ind, col] = np.sum(
-                        temp_data[col][ind] * weights
-                    ) / normalization
+                    out.loc[res_ind, col] = np.sum(temp_data[col][ind] * weights)
                 progress.tick()
         return out
 
@@ -797,10 +761,8 @@ class Gist:
         self,
         columns,
         centers='struct',
-        cutoff_E=0,
         rmax=7.0,
         atomic_radii=None,
-        col_suffix='_dens',
         weighting_method=None,
         weighting_options=None,
     ):
@@ -808,15 +770,11 @@ class Gist:
 
         Parameters
         ----------
-        columns : str or list of str
-            column indices to project.  Must be valid indices for GistFile.data
+        columns : str or list of (str or GistQuantity)
+            column indices to project.
         centers : np.ndarray, shape=(n, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
-        cutoff_E : float
-            Energy density, that a voxel (in kcal/mol) needs to have in order to be
-            included in the projection. No normalization is performed prior to applying
-            this cutoff.
         rmax : float
             Maximum distance, in angstrom, of voxel centers to the nearest atom
             (defined by its center or its atomic surface, if atomic_radii is given)
@@ -826,9 +784,6 @@ class Gist:
             closest atomic center. If 'struct', uses the radii of self.struct. If None,
             calculate the distance to the centers instead of to the atomic surface.
             (Default None)
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            function is only correct with density-weighted columns.
         weighting_method : str or None
             Used to weight voxels by their distance to the nearest atom.
         weighting_options : dict
@@ -847,22 +802,15 @@ class Gist:
 
         ind, closest, dist = self.distance_to_spheres(centers, rmax=rmax, atomic_radii=atomic_radii)
 
-        if weighting_options is None:
-            weighting_options = {}
-        if weighting_method is not None:
+        weighting_options = weighting_options or {}
+        if weighting_method is None:
+            weights = 1
+        else:
             weights = distance_weight(dist, weighting_method, **weighting_options)
 
         normalized_data = {}
         for col in columns:
-            if col == 'voxels':
-                values == np.ones_like(ind)
-            else:
-                values = self.loc[ind, col + col_suffix].values
-            if cutoff_E != 0:
-                values[np.abs(values) < cutoff_E] = 0
-            values *= self.grid.voxel_volume
-            if weighting_method is not None:
-                values *= weights
+            values = self.get_total(col, index=ind) * weights
             normalized_data[col] = values
 
         normalized_data['atom_index'] = closest
@@ -870,23 +818,23 @@ class Gist:
         out = df.groupby('atom_index').sum()
         return out
 
-    def multiple_per_atom_rdfs(
+    def multiple_rdfs(
         self,
         columns,
         centers='struct',
         rmax=5.,
         bins=20,
         atomic_radii=None,
-        col_suffix='_dens',
+        normalize='none',
+        per_atom=False,
     ):
         """Create a radial distribution function (rdf) of GIST quantities around
         centers.
 
         Parameters
         ----------
-        columns : str or list of str
-            column indices to project.  Must be valid indices for GistFile.data. If
-            'voxels' is given as a column name, returns the voxel count instead.
+        columns : str or list of (str or GistQuantity)
+            column indices to project.
         centers : np.ndarray, shape=(n, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
@@ -902,9 +850,15 @@ class Gist:
             closest atomic center. If 'struct', uses the radii of self.struct. If None,
             calculate the distance to the centers instead of to the atomic surface.
             (Default None)
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            function is only correct with density-weighted columns.
+        normalize : str or list of str
+            How to normalize the rdfs ("none", "dens", or "norm"). "none": compute the
+            sum of each shell. "dens": normalize by the shell volume (basically a volume
+            average). "norm": normalize by the number of solvent molecules in the shell
+            (basically a molecule average). Default: "dens"
+        per_atom : bool
+            Whether to report the rdfs separately for each atom. If True,
+            return a list of DataFrames where the first dimension is the atoms.
+            Else, return a list of Series.
 
         Returns
         -------
@@ -921,23 +875,42 @@ class Gist:
         bins = np.asarray(bins)
         if len(bins.shape) == 0:
             bins = np.linspace(0, rmax, bins, endpoint=False)
+        if isinstance(normalize, str):
+            normalize = [normalize] * len(columns)
 
         ind, closest_atom, dist = self.distance_to_spheres(centers, rmax=rmax, atomic_radii=atomic_radii)
+        if per_atom:
+            n_atoms = len(centers)
+        else:
+            n_atoms = 1
+            closest_atom[:] = 0
 
         distance_bins = np.digitize(dist, bins)
         # This is not the final shape of the output dataframe, since we exclude
         # the first distance bin later on...
-        df_shape = (len(bins)+1, len(centers))
+        df_shape = (len(bins)+1, n_atoms)
         distance_and_atom_bin = np.ravel_multi_index(
             (distance_bins, closest_atom), dims=df_shape
         )
 
         rdfs = []
-        for col in columns:
-            if col == 'voxels':
-                coldata = np.ones_like(ind)
+        for col, norm_by in zip(columns, normalize):
+            if norm_by == 'none':
+                normalization = 1
+            elif norm_by == 'dens':
+                voxels_per_bin = np.bincount(distance_and_atom_bin, minlength=np.prod(df_shape))
+                volume_per_bin = voxels_per_bin * self.grid.voxel_volume
+                with np.errstate(divide='ignore'):
+                    normalization = 1 / volume_per_bin
+            elif norm_by == 'norm':
+                n_solvent = self.loc[ind, 'population'].values / self.n_frames
+                with np.errstate(divide='ignore'):
+                    normalization = 1 / np.bincount(
+                        distance_and_atom_bin, weights=n_solvent, minlength=np.prod(df_shape)
+                    ).reshape(df_shape).T
             else:
-                coldata = self.loc[ind, col + col_suffix].values * self.grid.voxel_volume
+                raise ValueError("Unknown argument to normalize: ", norm_by)
+            coldata = self.get_total(col, index=ind)
             integrals = np.bincount(
                 distance_and_atom_bin,
                 weights=coldata,
@@ -948,10 +921,14 @@ class Gist:
             # DataFrames. There is probably another way to do this, but this
             # works nicely.
             # Now atoms in rows and bins in columns.
-            integrals_per_atom = integrals.reshape(df_shape).T
+            with np.errstate(invalid='ignore'):
+                integrals_per_atom = integrals.reshape(df_shape).T * normalization
             # Exclude the first and last column (bins for dist < 0 and dist > rmax)
             integrals_per_atom = integrals_per_atom[:, 1:]
-            rdfs.append(pd.DataFrame(integrals_per_atom))
+            if per_atom:
+                rdfs.append(pd.DataFrame(integrals_per_atom))
+            else:
+                rdfs.append(pd.Series(integrals_per_atom[0]))
         return bins, rdfs
 
     def rdf(
@@ -961,7 +938,8 @@ class Gist:
         rmax=5.,
         bins=20,
         atomic_radii=None,
-        col_suffix='_dens',
+        normalize='none',
+        per_atom=False,
     ):
         """Create a radial distribution function (rdf) of a single GIST
         quantities around centers.
@@ -986,9 +964,12 @@ class Gist:
             closest atomic center. If 'struct', uses the radii of self.struct. If None,
             calculate the distance to the centers instead of to the atomic surface.
             (Default None)
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            function is only correct with density-weighted columns.
+        normalize : str or list of str
+            How to normalize the rdfs ("none", "dens", or "norm"). Default: "dens"
+        per_atom : bool
+            Whether to report the rdfs separately for each atom. If True,
+            return a list of DataFrames where the first dimension is the atoms.
+            Else, return a list of Series.
 
         Returns
         -------
@@ -997,125 +978,16 @@ class Gist:
         rdf : pd.Series.
             The sum of the respective column voxels, summed per distance bin.
         """
-        bins, (rdf, ) = self.multiple_per_atom_rdfs(
+        bins, (rdf, ) = self.multiple_rdfs(
             columns=[column],
             centers=centers,
             rmax=rmax,
             bins=bins,
             atomic_radii=atomic_radii,
-            col_suffix=col_suffix,
-        )
-        return bins, rdf.sum(0).rename(column)
-
-    def per_atom_rdf(
-        self,
-        column,
-        centers='struct',
-        rmax=5.,
-        bins=20,
-        atomic_radii=None,
-        col_suffix='_dens',
-    ):
-        """Create a radial distribution function (rdf) of a single GIST
-        quantities around centers.
-
-        Parameters
-        ----------
-        column : str
-            column index to project.  Must be valid index for GistFile.data. If
-            'voxels' is given as a column name, returns the voxel count instead.
-        centers : np.ndarray, shape=(n, 3)
-            Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
-            Default 'struct'.
-        rmax : float
-            Radius of the sphere from which voxels are to be projected onto the atoms,
-            in angstrom.
-        bins : int or 1D array-like
-            Histogram edges (if array-like) or the number of bins that should be
-            created for the range [0:rmax]
-        atomic_radii : np.ndarray or None or 'struct'
-            The atomic radius will be subtracted from every computed distance, yielding
-            the distance to the molecular surface instead of the distance to the
-            closest atomic center. If 'struct', uses the radii of self.struct. If None,
-            calculate the distance to the centers instead of to the atomic surface.
-            (Default None)
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            function is only correct with density-weighted columns.
-
-        Returns
-        -------
-        bins : np.ndarray(shape=(bins,))
-            The left edge of each distance bin.
-        rdf : pandas.DataFrame
-            The sum of the respective column voxels, summed per atom (in rows)
-            and per distance bin (columns).
-        """
-        bins, (rdf, ) = self.multiple_per_atom_rdfs(
-            columns=[column],
-            centers=centers,
-            rmax=rmax,
-            bins=bins,
-            atomic_radii=atomic_radii,
-            col_suffix=col_suffix,
+            normalize=normalize,
+            per_atom=per_atom,
         )
         return bins, rdf
-
-    def multiple_rdfs(
-        self,
-        columns,
-        centers='struct',
-        rmax=5.,
-        bins=20,
-        atomic_radii=None,
-        col_suffix='_dens',
-    ):
-        """Create a radial distribution function (rdf) of a single GIST
-        quantities around centers.
-
-        Parameters
-        ----------
-        columns : str or list of str
-            column indices to project.  Must be valid indices for self. If
-            'voxels' is given as a column name, returns the voxel count instead.
-        centers : np.ndarray, shape=(n, 3)
-            Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
-            Default 'struct'.
-        rmax : float
-            Radius of the sphere from which voxels are to be projected onto the atoms,
-            in angstrom.
-        bins : int or 1D array-like
-            Histogram edges (if array-like) or the number of bins that should be
-            created for the range [0:rmax]
-        atomic_radii : np.ndarray or None or 'struct'
-            The atomic radius will be subtracted from every computed distance, yielding
-            the distance to the molecular surface instead of the distance to the
-            closest atomic center. If 'struct', uses the radii of self.struct. If None,
-            calculate the distance to the centers instead of to the atomic surface.
-            (Default None)
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            function is only correct with density-weighted columns.
-
-        Returns
-        -------
-        bins : np.ndarray(shape=(bins,))
-            The left edge of each distance bin.
-        rdfs : List of pd.Series
-            The sum of the respective column voxels, summed per atom (in rows)
-            for each column in columns.
-        """
-        if isinstance(columns, str):
-            columns = [columns]
-        bins, rdfs = self.multiple_per_atom_rdfs(
-            columns=columns,
-            centers=centers,
-            rmax=rmax,
-            bins=bins,
-            atomic_radii=atomic_radii,
-            col_suffix=col_suffix,
-        )
-        return bins, [rdf.sum(0).rename(col) for rdf, col in zip(rdfs, columns)]
 
     def norm2dens(self, data, index=slice(None)):
         """Convert an arbitrary data column from a _norm quantity to a _dens quanity."""
@@ -1129,12 +1001,13 @@ class Gist:
 
     def dens2norm(self, data, index=slice(None)):
         """Convert an arbitrary data column from a _dens quantity to a _norm quanity."""
-        return (
-            data
-            / self.loc[index, 'population']
-            * self.grid.voxel_volume
-            * self.n_frames
-        )
+        pop = self.loc[index, 'population'].values
+        out = data / pop * (self.grid.voxel_volume * self.n_frames)
+        empty = pop == 0
+        if not np.allclose(data[empty], 0):
+            warnings.warn("Omitting values while converting _dens column to _norm because population is 0.")
+        out[empty] = 0
+        return out
 
     def save_dx(self, column, filename):
         """Save a single GIST column to an OpenDX file.
@@ -1153,27 +1026,7 @@ class Gist:
         assert isinstance(column, str), 'save_dx requires a single column name as input.'
         data = self[column].values
         self.grid.save_dx(data, filename, column)
-        # np.savetxt(
-        #     filename,
-        #     data,
-        #     header=self.grid.dxheader(),
-        #     footer=self.grid.dxfooter(column),
-        #     comments='',
-        #     fmt='%f'
-        # )
         return
-
-    # def _recipe_eww_unref_norm(self, index):
-    #     """When using PME, there is no Eww_unref_norm. Use PME_norm instead."""
-    #     return self.loc[index, 'PME_norm']
-
-    # def _recipe_eww_unref_dens(self, index):
-    #     """When using PME, there is no Eww_unref_dens. Use PME_dens instead.
-
-    #     In contrast to other _dens recipes, this does not use norm2dens. This
-    #     is because eww_unref_dens is used to detect the number of frames and
-    #     rho0."""
-    #     return self.loc[index, 'PME_dens']
 
     def _recipe_eww_norm(self, index):
         """Create Eww_norm."""
@@ -1211,16 +1064,22 @@ class Gist:
         """Create A_dens."""
         return self.norm2dens(self.loc[index, 'A_norm'], index)
 
+    def _recipe_voxels(self, index):
+        """Create voxels (equal to 1 in every voxel)."""
+        return pd.Series(np.ones(self.grid.size, dtype=int)).loc[index]
+
     def __getitem__(self, key):
         if isinstance(key, list):  # A list was passed
             return pd.DataFrame.from_dict({
                 col: self[col] for col in key
             })
+        if isinstance(key, GistQuantity):
+            key = str(key)
         try:
             return self.data[key]
         except KeyError as e:
             try:
-                return self._recipes[key](slice(None, None, None))
+                return self._recipes[key](slice(None))
             except:
                 raise e
 
@@ -1259,18 +1118,13 @@ class _GistLocator:
         if not isinstance(key, tuple) or len(key) == 1:  # only one argument was passed
             return self.gist.data.loc[key]
         assert len(key) == 2, "Only 1D and 2D indexing is supported by _GistLocator"
-        if isinstance(key[1], list):  # A list was passed
+        idx, columns = key
+        if isinstance(columns, list):
             return pd.DataFrame.from_dict({
-                col: self.gist.loc[key[0], col] for col in key[1]
+                col: self.gist[col].loc[idx] for col in columns
             })
         else:  # Assumes (!) that a single column name was passed.
-            try:
-                return self.gist.data.loc[key]
-            except KeyError as e:
-                try:
-                    return self.gist._recipes[key[1]](key[0])
-                except:
-                    raise e
+            return self.gist[columns].loc[idx]
 
     def __setitem__(self, key, value):
         # Hopefully safe way to check if a list was passed instead of a column name.
@@ -1446,3 +1300,93 @@ def combine_gists(gists):
         rho0=gists[0].rho0,
         eww_ref=gists[0].eww_ref,
     )
+
+
+class VoxelNormalization:
+    """Functions to obtain normalization factors from a GIST file.
+
+    Multiply to obtain the total, divide to normalize.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> data = np.array([13., 4., 6., -5., -9., -1., 8., 10.])
+    >>> df = pd.DataFrame({
+    ...     'x': [0, 0, 0, 0, 0.5, 0.5, 0.5, 0.5],
+    ...     'y': [0, 0, 0.5, 0.5, 0, 0, 0.5, 0.5],
+    ...     'z': [0, 0.5, 0, 0.5, 0, 0.5, 0, 0.5],
+    ...     'population': [2, 1, 1, 1, 1, 1, 1, 1],
+    ...     'Eww_unref_norm': data})
+    >>> a = Gist(df, eww_ref=-9.533, n_frames=1, rho0=0.003)
+    >>> VoxelNormalization.dens(a)
+    0.125
+    >>> VoxelNormalization.norm(a).values
+    array([2., 1., 1., 1., 1., 1., 1., 1.])
+    >>> np.testing.assert_allclose(
+    ...     a.norm2dens(a['Eww_unref_norm']),
+    ...     a['Eww_unref_norm'] * VoxelNormalization.norm(a) / VoxelNormalization.dens(a)
+    ... )
+    """
+    @staticmethod
+    def dens(gist, indices=None):
+        return gist.grid.voxel_volume
+
+    @staticmethod
+    def norm(gist, indices=None):
+        if indices is None:
+            indices = slice(None)
+        return gist.loc[indices, 'population'] / gist.n_frames
+
+    @staticmethod
+    def total(gist, indices=None):
+        return 1
+
+
+class GistQuantity:
+    """Store the name of a Gist output column and its normalization type.
+
+    This does not store any data. Instead it can be used as input for the Gist
+    class. It specifies a column / data row, and whether this data row should
+    be treated as a _norm or _dens quantity or a total (such as the population
+    or density).
+    """
+    def __init__(self, name, normalization):
+        self.name = name
+        if isinstance(normalization, str):
+            self.normalization = getattr(VoxelNormalization, normalization)
+        else:
+            self.normalization = normalization
+
+    @classmethod
+    def from_str(cls, name):
+        if name.endswith('_dens'):
+            return cls(name, 'dens')
+        elif name.endswith('_norm'):
+            return cls(name, 'norm')
+        elif name.startswith('g_') or name in ('voxels', 'population'):
+            return cls(name, 'total')
+        else:
+            raise ValueError("Unknown column type in column", name)
+
+    def get_raw(self, gist, indices=None):
+        if indices is None:
+            indices = slice(None)
+        return gist.loc[indices, str(self)]
+
+    def get_total(self, gist, indices=None):
+        return self.get_raw(gist, indices) * self.normalization(gist, indices)
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return f"{self.__class__}({self.name}, {self.normalization})"
+
+
+def as_gist_quantity(q):
+    if isinstance(q, str):
+        return GistQuantity.from_str(q)
+    elif isinstance(q, GistQuantity):
+        return q
+    else:
+        return TypeError("Cannot convert object to GistQuantity: ", q)

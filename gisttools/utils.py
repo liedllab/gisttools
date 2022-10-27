@@ -61,15 +61,13 @@ def preview_dataset(struct, dataset, crange='scale', view=None, cmap="YlGnBu", r
         filename = os.path.join(tmp, 'tmp.pdb')
         struct.save_pdb(filename, bfactors=dataset)
         view.add_component(filename)
-    view.set_representations(representations=[{
-        'type': 'surface',
-        'params': {
-            'colorScheme': 'bfactor',
-            'colorScale': cmap,
-            'colorReverse': reverse,
-            'colorDomain': crange,
-        }
-    }])
+    view.add_representation(
+        'surface',
+        color_scheme='bfactor',
+        color_scale=cmap,
+        color_reverse=reverse,
+        color_domain=crange
+    )
     return view
 
 
