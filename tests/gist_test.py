@@ -79,8 +79,12 @@ def small_outfile():
     return gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
 
 @pytest.fixture
-def small_outfile_with_shifted_origin():
-    gf = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=5000, eww_ref=-9.533)
+def outfile_x_stretched():
+    return gist.load_gist_file('tests/example_gist_5000frames_x_stretched.dat', n_frames=2500, eww_ref=-9.533)
+
+@pytest.fixture
+def outfile_x_stretched_shifted_origin():
+    gf = gist.load_gist_file('tests/example_gist_5000frames_x_stretched.dat', n_frames=5000, eww_ref=-9.533)
     gf.grid.origin[2] += 1.
     return gf
 
@@ -98,8 +102,8 @@ def dummy_gist():
     gf['val_norm'] = gf.dens2norm(gf['val_dens'])
     return gf
 
-def test_combine_gists(small_outfile, small_outfile_with_shifted_origin):
-    combined = gist.combine_gists([small_outfile, small_outfile_with_shifted_origin])
+def test_combine_gists(outfile_x_stretched, outfile_x_stretched_shifted_origin):
+    combined = gist.combine_gists([outfile_x_stretched, outfile_x_stretched_shifted_origin])
     expected_shape = np.array([2, 3, 4])
     expected_z_column = np.array([-0.25, 0.25, 0.75, 1.25]*6)
     assert_array_equal(combined.grid.shape, expected_shape)
@@ -138,14 +142,16 @@ def test_detect_gist_format_pme():
     assert gist.detect_gist_format(StringIO(PME_GIST_OUTPUT)) == 'pme'
     return
 
-def test_integrate_around():
+def test_load_without_refdens_warns():
+    with pytest.warns(RuntimeWarning):
+        gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=2500)
+
+def test_integrate_around(outfile_x_stretched):
     # voxel_volume is 1/4 and n_frames is 2500 because I doubled the spacing in
     # the x direction of the example file. The "magic" numbers in expected are
     # the sums of the respective voxels in the _dens columns.
-    example = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=2500, eww_ref=0)
-    with pytest.warns(RuntimeWarning):
-        example = gist.load_gist_file('tests/example_gist_5000frames.dat', n_frames=2500)
-    integrals = example.integrate_around(
+    outfile_x_stretched.eww_ref = 0.
+    integrals = outfile_x_stretched.integrate_around(
         ["A_dens", "Esw_dens"],
         centers=[[-0.5, -0.5, -0.25]],
         rmax=0.51,
@@ -172,11 +178,10 @@ def test_dens2norm(dummy_gist):
         dummy_gist.loc[0, 'population'] = 0
         dummy_gist.dens2norm(dummy_gist['val_dens'])
 
-def test_distance_to_spheres():
-    gf = gist.load_gist_file('tests/example_gist_5000frames.dat', eww_ref=-9.533)
+def test_distance_to_spheres(outfile_x_stretched):
     # In this case, the input coordinates are out of the grid, so there are not
     # much voxels found.
-    ind, center, dist = gf.distance_to_spheres(
+    ind, center, dist = outfile_x_stretched.distance_to_spheres(
         [[1.5, 0, 0], [-1.5, 0, 0]],
         rmax=0.6,
         atomic_radii=[0.3, 0.5]
@@ -279,6 +284,26 @@ def test_get_total(dummy_gist):
         expected_voxels = dummy_gist.grid.size if voxels is None else len(voxels)
         n_vox = dummy_gist.get_total('voxels', index=indices)
         assert n_vox.sum() == expected_voxels
+
+def test_get_total_referenced(small_outfile):
+    col = "dTStrans"
+    ref = 1.
+    dens = small_outfile[col + "_dens"]
+    norm = small_outfile[col + "_norm"]
+    dens_ref_tot = small_outfile.get_total_referenced(col + "_dens", ref)
+    norm_ref_tot = small_outfile.get_total_referenced(col + "_norm", ref)
+    assert_allclose(dens_ref_tot, norm_ref_tot, rtol=1e-6)
+    waters = small_outfile['population'] / small_outfile.n_frames
+    assert_allclose((norm - ref) * waters, norm_ref_tot, rtol=1e-6)
+
+def test_get_referenced(small_outfile):
+    col = "dTStrans"
+    ref = 1.
+    tot = small_outfile.get_total_referenced(col + "_dens", ref)
+    dens = small_outfile.get_referenced(col + "_dens", ref)
+    norm = small_outfile.get_referenced(col + "_norm", ref)
+    assert_allclose(dens, tot / small_outfile.grid.voxel_volume)
+    assert_allclose(norm, tot / small_outfile['population'] * small_outfile.n_frames, rtol=1e-6)
 
 def test_guess_column_type():
     assert gist.as_gist_quantity('something_dens').normalization == gist.VoxelNormalization.dens

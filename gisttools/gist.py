@@ -613,11 +613,33 @@ class Gist:
         ref_energy = (densities * refvals).sum(1)
         return ref_energy
 
-
     def get_total(self, column, index=None):
+        """The contribution of each voxel to the total, or integral.
+        
+        For _dens columns, this is the value * voxel_volume.
+        For _norm columns, this is the value * population / n_frames.
+        """
         column = as_gist_quantity(column)
         return column.get_total(self, indices=index)
 
+    def get_as_norm(self, column, index=None):
+        total = self.get_total(column, index=index)
+        return total / VoxelNormalization.norm(self)
+
+    def get_as_dens(self, column, index=None):
+        total = self.get_total(column, index=index)
+        return total / VoxelNormalization.dens(self)
+
+    def get_total_referenced(self, column, ref, index=None):
+        """Get total voxel contribution minus a PER-MOLECULE reference."""
+        norm = VoxelNormalization.norm(self, indices=index)
+        return self.get_total(column) - ref * norm
+
+    def get_referenced(self, column, ref, index=None):
+        """Subtract a per-molecule reference from the specified column."""
+        total = self.get_total_referenced(column, ref, index=index)
+        norm = as_gist_quantity(column).normalization(self, indices=index)
+        return total / norm
 
     def integrate_around(
         self,
@@ -630,18 +652,10 @@ class Gist:
         """Integrate the given columns around the given centers. If no centers are
         given, defaults to self.coord.
 
-        Notes
-        -----
-        This function only works with density-weighted columns, therefore _dens is
-        added to all columns by default. You can generate density-weighted columns from
-        normed columns using the dens2norm method. You can also override this behavior
-        by setting col_suffix=''.
-
         Parameters
         ----------
-        columns : list of str
-            column indices to project.  For each col, col + '_dens' must be valid
-            column index.
+        columns : list of (str or GistQuantity)
+            column indices to integrate.
         rmax : float
             Radius of the sphere from which voxels are to be projected onto the atoms,
             in angstrom.
@@ -682,28 +696,19 @@ class Gist:
         weighting_method=None,
         weighting_options=None,
     ):
-        """Project GIST data to the nearest atoms using the algorithm from Michi's
-        python scripts.
-
-        Notes
-        -----
-        This function only works with density-weighted columns, therefore _dens is
-        added to all columns by default. You can generate density-weighted columns from
-        normed columns using the dens2norm method. You can also override this behavior
-        by setting col_suffix=''.
+        """Project GIST data to atoms via an average within a sphere around each atom.
 
         Parameters
         ----------
-        columns : list of str
-            column indices to project.  For each col, col + '_dens' must be valid
-            column index.
+        columns : list of (str or GistQuantity)
+            column indices to project.
         rmax : float
             Radius of the sphere from which voxels are to be projected onto the atoms,
             in angstrom.
-        centers : np.ndarray, shape=(n, 3)
+        centers : np.ndarray, shape=(n_atoms, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
-        residues : iterable, len(residues) = n
+        residues : iterable of length n_atoms
             Residue numbers of all atoms.  Atoms with the same number will be treated
             as a residue.  If residues is None, treat all atoms separately.
         atomic_radii : np.ndarray or None or 'struct'.
@@ -712,9 +717,6 @@ class Gist:
             closest atomic center. If 'struct', uses the radii of self.struct. If None,
             calculate the distance to the centers instead of to the atomic surface.
             (Default None)
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            functions is only correct with density-weighted columns.
         weighting_method : str or None
             Used to weight voxels by their distance to the nearest atom. Can be
             'piecewise_linear', 'gaussian', 'logistic', None, or a callable. 
@@ -768,8 +770,8 @@ class Gist:
 
         Parameters
         ----------
-        columns : str or list of str
-            column indices to project.  Must be valid indices for GistFile.data
+        columns : str or list of (str or GistQuantity)
+            column indices to project.
         centers : np.ndarray, shape=(n, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
@@ -831,9 +833,8 @@ class Gist:
 
         Parameters
         ----------
-        columns : str or list of str
-            column indices to project.  Must be valid indices for GistFile.data. If
-            'voxels' is given as a column name, returns the voxel count instead.
+        columns : str or list of (str or GistQuantity)
+            column indices to project.
         centers : np.ndarray, shape=(n, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
@@ -850,7 +851,10 @@ class Gist:
             calculate the distance to the centers instead of to the atomic surface.
             (Default None)
         normalize : str or list of str
-            How to normalize the rdfs ("none", "dens", or "norm"). Default: "dens"
+            How to normalize the rdfs ("none", "dens", or "norm"). "none": compute the
+            sum of each shell. "dens": normalize by the shell volume (basically a volume
+            average). "norm": normalize by the number of solvent molecules in the shell
+            (basically a molecule average). Default: "dens"
         per_atom : bool
             Whether to report the rdfs separately for each atom. If True,
             return a list of DataFrames where the first dimension is the atoms.
@@ -984,7 +988,6 @@ class Gist:
             per_atom=per_atom,
         )
         return bins, rdf
-
 
     def norm2dens(self, data, index=slice(None)):
         """Convert an arbitrary data column from a _norm quantity to a _dens quanity."""
@@ -1300,8 +1303,32 @@ def combine_gists(gists):
 
 
 class VoxelNormalization:
+    """Functions to obtain normalization factors from a GIST file.
+
+    Multiply to obtain the total, divide to normalize.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> data = np.array([13., 4., 6., -5., -9., -1., 8., 10.])
+    >>> df = pd.DataFrame({
+    ...     'x': [0, 0, 0, 0, 0.5, 0.5, 0.5, 0.5],
+    ...     'y': [0, 0, 0.5, 0.5, 0, 0, 0.5, 0.5],
+    ...     'z': [0, 0.5, 0, 0.5, 0, 0.5, 0, 0.5],
+    ...     'population': [2, 1, 1, 1, 1, 1, 1, 1],
+    ...     'Eww_unref_norm': data})
+    >>> a = Gist(df, eww_ref=-9.533, n_frames=1, rho0=0.003)
+    >>> VoxelNormalization.dens(a)
+    0.125
+    >>> VoxelNormalization.norm(a).values
+    array([2., 1., 1., 1., 1., 1., 1., 1.])
+    >>> np.testing.assert_allclose(
+    ...     a.norm2dens(a['Eww_unref_norm']),
+    ...     a['Eww_unref_norm'] * VoxelNormalization.norm(a) / VoxelNormalization.dens(a)
+    ... )
+    """
     @staticmethod
-    def dens(gist, indices):
+    def dens(gist, indices=None):
         return gist.grid.voxel_volume
 
     @staticmethod
@@ -1311,23 +1338,33 @@ class VoxelNormalization:
         return gist.loc[indices, 'population'] / gist.n_frames
 
     @staticmethod
-    def total(gist, indices):
+    def total(gist, indices=None):
         return 1
 
 
 class GistQuantity:
+    """Store the name of a Gist output column and its normalization type.
+
+    This does not store any data. Instead it can be used as input for the Gist
+    class. It specifies a column / data row, and whether this data row should
+    be treated as a _norm or _dens quantity or a total (such as the population
+    or density).
+    """
     def __init__(self, name, normalization):
         self.name = name
-        self.normalization = normalization
+        if isinstance(normalization, str):
+            self.normalization = getattr(VoxelNormalization, normalization)
+        else:
+            self.normalization = normalization
 
     @classmethod
     def from_str(cls, name):
         if name.endswith('_dens'):
-            return cls(name, getattr(VoxelNormalization, 'dens'))
+            return cls(name, 'dens')
         elif name.endswith('_norm'):
-            return cls(name, getattr(VoxelNormalization, 'norm'))
+            return cls(name, 'norm')
         elif name.startswith('g_') or name in ('voxels', 'population'):
-            return cls(name, getattr(VoxelNormalization, 'total'))
+            return cls(name, 'total')
         else:
             raise ValueError("Unknown column type in column", name)
 
