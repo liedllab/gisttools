@@ -507,15 +507,29 @@ class Gist:
 
         Examples
         --------
-        >>> # Reference Eww and dTSsix columns of a Gist object called gf
-        >> eww_ref, dts_ref = gf.detect_reference_value(
-        ..     ['Eww_unref_dens', 'dTSsix_dens'],
-        ..     dlim=(16, 24)
-        .. ).values
-        >> gf.eww_ref = eww_ref
-        >> # There is no built-in referencing for columns other than Eww, but we can re-calculate them.
-        >> gf['dTSsix_norm'] -= dts_ref
-        >> gf['dTSsix_dens'] = gf.norm2dens(gf['dTSsix_norm'])
+        >>> # Reference Eww and dTSsix columns of a Gist object
+        >>> import pandas as pd
+        >>> a = pd.DataFrame({
+        ...     'population': [25],
+        ...     'g_O': [1.21581],
+        ...     'Eww_unref_dens': [-0.4],
+        ...     'Eww_unref_norm': [-10.0],
+        ...     'dTSsix_dens': [0.2],
+        ...     'dTSsix_norm': [5.0]
+        ... })
+        >>> gist = Gist(a, grid=Grid(0, 1, 0.5), eww_ref=0)
+        >>> gist.detect_reference_value(
+        ...     ['Eww_unref_dens', 'dTSsix_dens'],
+        ...     dlim=(1.5, 2.5), centers=[[2, 0, 0]],
+        ...     min_relative_population=0., max_spread=11.,
+        ... )
+        [-10.0, 5.0]
+        >>> gist.eww_ref = -10.
+        >>> # There is no built-in referencing for columns other than Eww, but we can re-calculate them.
+        >>> gist.get_referenced('dTSsix_norm', 5.).values.tolist()
+        [0.0]
+        >>> gist.get_referenced('dTSsix_dens', 5.).values.tolist()
+        [0.0]
 
         Returns
         -------
@@ -530,6 +544,7 @@ class Gist:
         # in half for the sanity checks.
         _, (pop_hist, *histograms) = self.multiple_rdfs(
             ['population'] + columns,
+            centers=centers,
             rmax=dlim[1],
             bins=np.linspace(dlim[0], dlim[1], 2, endpoint=False),
             normalize=['none'] + ['norm']*len(columns),
@@ -551,6 +566,7 @@ class Gist:
 
         ref_values = []
         for col, hist in zip(columns, histograms):
+            hist[pop_hist == 0] = 0  # Avoid NaNs if a bin has zero population
             # Normalize hist by the population, so that it converges towards the per_molecule reference value.
             ref_values.append(np.average(hist, weights=pop_hist))
             # Sanity check Nr. 2:
