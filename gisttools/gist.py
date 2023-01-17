@@ -469,7 +469,6 @@ class Gist:
     def detect_reference_value(
         self,
         columns='Eww_unref_dens',
-        col_suffix='_dens',
         centers='struct',
         dlim=(12, 16),
         n_bins=10,
@@ -480,6 +479,9 @@ class Gist:
         Detects the reference value for col using a mean over voxels that are (hopefully)
         sufficiently far away from the molecule defined by centers.
 
+        Note that while the reference value is only correctly calculated from _dens columns, it 
+        is used to reference _norm columns!
+
         Be careful when subtracting the return value of detect_reference_value from a
         _norm column. This function returns a Series of length len(columns), which
         cannot directly be subtracted from a Gist column, which is a Series of length
@@ -489,10 +491,6 @@ class Gist:
         ----------
         col : str
             For which GIST column the reference value should be calculated.
-        col_suffix : str, default '_dens'
-            Will be added to the column label. The default is _dens because this function
-            is only correct with normed columns, even though the output is used to
-            reference the _norm column.
         centers : np.ndarray, shape=(n, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
@@ -511,7 +509,7 @@ class Gist:
         --------
         >>> # Reference Eww and dTSsix columns of a Gist object called gf
         >> eww_ref, dts_ref = gf.detect_reference_value(
-        ..     ['Eww_unref', 'dTSsix'],
+        ..     ['Eww_unref_dens', 'dTSsix_dens'],
         ..     dlim=(16, 24)
         .. ).values
         >> gf.eww_ref = eww_ref
@@ -652,6 +650,8 @@ class Gist:
         """Integrate the given columns around the given centers. If no centers are
         given, defaults to self.coord.
 
+        Note that this function only provides correct results for density-weighted columns (_dens)!
+
         Parameters
         ----------
         columns : list of (str or GistQuantity)
@@ -662,9 +662,6 @@ class Gist:
         centers : np.ndarray, shape=(n, 3), or 'struct'.
             Positions of n atoms to project GIST data to. If 'struct' is given, uses
             self.coord.
-        col_suffix : str, default '_dens'
-            Will be added to all column labels. The default is _dens because this
-            functions is only correct with density-weighted columns.
         weighting_method : str or None
             Used to weight voxels by their distance to the nearest atom. Can be
             'piecewise_linear', 'gaussian', 'logistic', None, or a callable.
