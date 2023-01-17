@@ -2,7 +2,7 @@ from gisttools.gist import load_gist_file, combine_gists, load_dx
 import mdtraj as md
 import numpy as np
 import argparse
-from os.path import splitext
+from os.path import splitext, basename
 
 
 def weighting_presets(method, radius):
@@ -102,11 +102,20 @@ def load_grids(gist_file, dx_files, Eww_ref=None, ffmt=None, autodetect_refcol='
     )
     # combined = combine_gists(gist_objs)
     xyz = gist_obj.grid.xyz(np.arange(gist_obj.grid.n_voxels))
-    for fname in dx_files:
-        dx = load_dx(fname)
-        basename = list(dx.data.keys())[0]
-        gist_obj[basename + '_norm'] = dx.interpolate([basename], xyz)[basename]
-        gist_obj[basename + '_dens'] = gist_obj.norm2dens(gist_obj[basename + '_norm'])
+    for fname_type in dx_files:
+        if fname_type.endswith(':dens'):
+            coltype = 'dens'
+        elif fname_type.endswith(':norm'):
+            coltype = 'norm'
+        elif fname_type.endswith(':total'):
+            coltype = 'total'
+        else:
+            raise ValueError("Specify dx file normalization by appending :dens, :norm or :total")
+        fname = fname_type[:-(len(coltype)+1)]
+        dx = load_dx(fname, colname='dx')
+        fbase = splitext(basename(fname))[0]
+        print(fbase + '_' + coltype)
+        gist_obj[fbase + '_' + coltype] = dx.interpolate(['dx'], xyz)['dx']
     return gist_obj
 
 
