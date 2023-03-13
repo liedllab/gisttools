@@ -242,6 +242,34 @@ def test_projection_nearest_no_weight(coords_3x3x100):
         proj = gf.projection_nearest(['TEST_dens', 'voxels'], rmax=dist)
         np.testing.assert_allclose(proj.TEST_dens.values, dist + 1)
 
+
+def test_projection_mean_no_residues():
+    g = grid.Grid.centered(0, 10, .5)
+    data = np.zeros((10, 10, 10))
+    data[5:] = 1
+    population = np.ones((10, 10, 10)) * g.voxel_volume * 5
+    gf = gist.Gist(pd.DataFrame({'data_dens': data.ravel(), 'population': population.ravel()}), grid=g, n_frames=1, rho0=1.)
+    centers = [[-5, 0, 0], [5, 0, 0]]
+    np.testing.assert_allclose(
+        gf.projection_mean(['data_dens'], centers=centers).values,
+        [[0], [0.2]]
+    )
+    assert gf.projection_mean(['data_dens'], centers=centers).dtypes['data_dens'] == float
+
+
+def test_projection_mean_with_residues():
+    g = grid.Grid.centered(0, 10, .5)
+    data = np.zeros((10, 10, 10))
+    data[5:] = 1
+    population = np.ones((10, 10, 10)) * g.voxel_volume * 5
+    gf = gist.Gist(pd.DataFrame({'data_dens': data.ravel(), 'population': population.ravel()}), grid=g, n_frames=1, rho0=1.)
+    centers = [[-5, 0, 0], [5, 0, 0]]
+    np.testing.assert_allclose(
+        gf.projection_mean(['data_dens'], centers=centers, residues=[0, 0]).values,
+        [[0.1]]
+    )
+
+
 def test_rdf(dummy_gist):
     gf = dummy_gist
     pop = gf['population']
