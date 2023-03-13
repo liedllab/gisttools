@@ -765,7 +765,7 @@ class Gist:
                 ind, _, dist = self.distance_to_spheres(centers[res_ind], rmax=rmax, atomic_radii=atomic_radii)
                 weights = distance_weight(dist, weighting_method, **weighting_options)
                 for col in columns:
-                    out.loc[res_ind, col] = np.sum(temp_data[col][ind] * weights)
+                    out.loc[resnum, col] = np.sum(temp_data[col][ind] * weights)
                 progress.tick()
         return out
 
