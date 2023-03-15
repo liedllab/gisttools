@@ -749,6 +749,7 @@ class Gist:
             columns = [columns]
         if isinstance(centers, str) and centers == 'struct':
             centers = self.coord
+        centers = np.asarray(centers)
         if residues is None:
             residues = np.arange(centers.shape[0])
         if weighting_options is None:
@@ -757,15 +758,17 @@ class Gist:
         unique_res = OrderedDict()
         for i, r in enumerate(residues):
             unique_res.setdefault(r, []).append(i)
-        out = pd.DataFrame(index=unique_res, columns=columns)
+        out = pd.DataFrame(index=unique_res, columns=columns, dtype=float)
         temp_data = {c: self.get_total(c).values for c in columns}
+        n_solvents = self.get_total('population').values / self.n_frames
 
         with ProgressPrinter('{:.0f} % of atoms processed.', len(unique_res)) as progress:
             for resnum, res_ind in unique_res.items():
                 ind, _, dist = self.distance_to_spheres(centers[res_ind], rmax=rmax, atomic_radii=atomic_radii)
                 weights = distance_weight(dist, weighting_method, **weighting_options)
+                normalization = 1 / (np.sum(weights * n_solvents[ind]))
                 for col in columns:
-                    out.loc[res_ind, col] = np.sum(temp_data[col][ind] * weights)
+                    out.loc[resnum, col] = np.sum(temp_data[col][ind] * weights) * normalization
                 progress.tick()
         return out
 
