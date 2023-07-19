@@ -1,6 +1,6 @@
 numpy
 pandas
-numba
+numba>=0.51
 mdtraj
 scipy
 GridDataFormats
