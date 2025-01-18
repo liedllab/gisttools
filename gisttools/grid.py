@@ -173,7 +173,7 @@ class Grid:
         array([4])
         >>> test = np.arange(27)
         >>> np.all(a.flat_indices(a.xyz_indices(test)) == test)
-        True
+        np.True_
         """
         xyz_indices = np.asarray(xyz_indices)
         assert np.issubdtype(
@@ -482,9 +482,9 @@ class Grid:
         >>> ind2
         array([ 0,  1,  3,  4,  9, 10, 12, 13])
         >>> np.all(ind_full == np.unique((ind1, ind2)))
-        True
+        np.True_
         >>> np.all(dists == testdist)
-        True
+        np.True_
         """
         centers = np.asarray(centers).reshape(-1, 3)
         current_smallest = np.full(self.size, np.inf)
@@ -557,9 +557,9 @@ class Grid:
         >>> ind2
         array([ 0,  1,  3,  4,  9, 10, 12, 13])
         >>> np.all(ind_full == np.unique((ind1, ind2)))
-        True
+        np.True_
         >>> np.all(dists == testdist - 0.5)
-        True
+        np.True_
         """
         # In contrast to distance_to_centers, this function has to operate on the
         # (non-squared) distances.

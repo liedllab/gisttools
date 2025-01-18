@@ -308,7 +308,7 @@ class Gist:
         >>> a.interpolate(['Eww_unref_norm'], np.array([[.5, .5, .5]]))
         {'Eww_unref_norm': array([3.25])}
         >>> np.average(data)
-        3.25
+        np.float64(3.25)
         >>> a.interpolate(['Eww_unref_norm'], np.array([[0, 0, .5]]))
         {'Eww_unref_norm': array([8.5])}
         >>> a.interpolate(['Eww_unref_norm'], np.array([[0, 1, .5], [3, 2, 1]]))
@@ -523,7 +523,7 @@ class Gist:
         ...     dlim=(1.5, 2.5), centers=[[2, 0, 0]],
         ...     min_relative_population=0., max_spread=11.,
         ... )
-        [-10.0, 5.0]
+        [np.float64(-10.0), np.float64(5.0)]
         >>> gist.eww_ref = -10.
         >>> # There is no built-in referencing for columns other than Eww, but we can re-calculate them.
         >>> gist.get_referenced('dTSsix_norm', 5.).values.tolist()
@@ -1198,7 +1198,7 @@ def load_gist_file(
 
     df = pd.read_csv(
         filename,
-        delim_whitespace=True,
+        sep=r'\s+',
         names=colnames,
         header=0,
         skiprows=1,
@@ -1335,7 +1335,7 @@ class VoxelNormalization:
     ...     'Eww_unref_norm': data})
     >>> a = Gist(df, eww_ref=-9.533, n_frames=1, rho0=0.003)
     >>> VoxelNormalization.dens(a)
-    0.125
+    np.float64(0.125)
     >>> VoxelNormalization.norm(a).values
     array([2., 1., 1., 1., 1., 1., 1., 1.])
     >>> np.testing.assert_allclose(
