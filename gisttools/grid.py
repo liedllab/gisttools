@@ -49,7 +49,7 @@ class Grid:
 
     @staticmethod
     def broadcast_origin(origin):
-        return np.broadcast_to(np.asfarray(origin), (3,)).copy()
+        return np.broadcast_to(np.asarray(origin, dtype=np.float64), (3,)).copy()
 
     @staticmethod
     def broadcast_shape(shape):
@@ -60,7 +60,7 @@ class Grid:
 
     @staticmethod
     def broadcast_delta(delta):
-        return np.broadcast_to(np.asfarray(delta), (3)).copy()
+        return np.broadcast_to(np.asarray(delta, dtype=np.float64), (3)).copy()
 
     @classmethod
     def centered(cls, center, shape, delta):
@@ -427,7 +427,7 @@ class Grid:
         -----
         This is a helper function that returns the squared distance.
         """
-        center = np.asfarray(center, dtype=np.float64).reshape(3)
+        center = np.asarray(center, dtype=np.float64).reshape(3)
         flat_indices, sqrdist = _surrounding_sphere(
             origin=self.origin,
             shape=self.shape,
