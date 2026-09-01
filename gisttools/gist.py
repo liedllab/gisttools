@@ -471,7 +471,6 @@ class Gist:
         columns='Eww_unref_dens',
         centers='struct',
         dlim=(12, 16),
-        n_bins=10,
         min_relative_population=0.2,
         max_spread=0.01,
     ):
@@ -489,8 +488,8 @@ class Gist:
 
         Parameters
         ----------
-        col : str
-            For which GIST column the reference value should be calculated.
+        columns : str, or a list of str
+            For which GIST column(s) the reference value should be calculated.
         centers : np.ndarray, shape=(n, 3)
             Positions of n atoms to project GIST data to. If 'struct', uses self.coord.
             Default 'struct'.
@@ -540,8 +539,8 @@ class Gist:
         single_value_requested = isinstance(columns, str)
         if single_value_requested:
             columns = [columns]
-        # There must be an even number of bins, so that we can split the range
-        # in half for the sanity checks.
+        # Use exactly 2 bins, so that the sanity checks below can compare the
+        # first and the second half of the distance range.
         _, (pop_hist, *histograms) = self.multiple_rdfs(
             ['population'] + columns,
             centers=centers,
